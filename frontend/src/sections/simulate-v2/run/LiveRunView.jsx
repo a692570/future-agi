@@ -8,8 +8,9 @@ import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import RunResults from "./RunResults";
 import { publishRun, installMockExecutionAdapter } from "../_mock/executionAdapter";
-import { rebuildRun } from "../_mock/comparison";
-import { currentAgentVersion, currentEnvVersion, versionNumber } from "../_mock/versions";
+import { rebuildRun, TRIAL_CHANGES } from "../_mock/comparison";
+import { agentVersions, currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
+import { runInputs, scenariosInEnvVersion, toolFit } from "../_mock/toolFit";
 import { twinTimelineFor } from "../_mock/twins";
 import { getEnvironment } from "../_mock/environments";
 import { getSurface } from "../_mock/surfaces";
@@ -54,12 +55,31 @@ export default function LiveRunView() {
     four-scenario check as a full sweep that lost twenty-eight rows.
   */
   const only = params.get("only");
+  /* `?agent=` runs a specific agent version — how a comparison re-runs v1 on
+     the environment v2 was rebuilt for. Otherwise the current one. */
+  const agentParam = params.get("agent");
+  const runAgent = agentParam && agentVersions(envState).some((v) => v.label === agentParam)
+    ? agentParam
+    : currentAgentVersion(envState).label;
+  /* `?env=` runs on a specific environment version without moving the
+     environment's own pin — how Compare re-runs an older agent on the newer
+     world. Otherwise the pinned one. */
+  const envParam = params.get("env");
+  const runEnv = envParam && environmentVersions(env, envState).some((v) => v.label === envParam)
+    ? envParam
+    : currentEnvVersion(env, envState)?.label;
+  /* Only the scenarios that exist in this environment version — ones a later
+     rebuild added for a tool this world never learned are not part of it. */
   const scenarios = useMemo(() => {
-    if (!only) return envState.scenarios;
+    const inVersion = scenariosInEnvVersion(envState, runEnv);
+    if (!only) return inVersion;
     const wanted = new Set(only.split(","));
-    const subset = envState.scenarios.filter((sc) => wanted.has(sc.id));
-    return subset.length ? subset : envState.scenarios;
-  }, [only, envState.scenarios]);
+    const subset = inVersion.filter((sc) => wanted.has(sc.id));
+    return subset.length ? subset : inVersion;
+    /* Keyed on the scenario list, not the whole env state — recording the run
+       itself updates the env state, and must not rebuild the run mid-flight. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [only, envState.scenarios, runEnv]);
 
   /*
     Trials per scenario (PRD §10.2 AC-10.7 — reliability across
@@ -70,18 +90,26 @@ export default function LiveRunView() {
   */
   const repeats = (() => {
     const raw = Number(params.get("trials"));
-    if (!Number.isFinite(raw) || raw < 1) return 1;
+    if (!Number.isFinite(raw) || raw < 1) return 3;
     return Math.min(20, Math.floor(raw));
   })();
+
+  /* What the outcome depends on — the agent version and the environment
+     version this run pins — read exactly as a later replay reads them.
+     Memoised: the player rebuilds the run whenever its inputs change identity. */
+  const inputs = useMemo(
+    () => runInputs(env, envState, { agent: runAgent, envVersion: runEnv }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, runAgent, runEnv, envState.envVersions, envState.agentVersions, envState.actors],
+  );
 
   const player = useRunPlayer({
     seed: runId,
     scenarios,
     stage: surface.stage,
     evals,
-    tools: env?.tools || [],
     repeats,
-    phrasing: versionNumber(currentAgentVersion(envState).label),
+    ...inputs,
   });
 
   const {
@@ -153,8 +181,10 @@ export default function LiveRunView() {
     const per = trialMatch.trial.perScenario || {};
     return base.map((task) => {
       const outcome = per[task.scenarioId] || per[task.id];
-      if (!outcome) return task;
-      const passed = outcome === "passed" || outcome === "fixed";
+      /* Only what the trial changed moves; unchanged scenarios keep their
+         own outcome (passing, flaky or failing). */
+      if (!outcome || !TRIAL_CHANGES[outcome]) return task;
+      const passed = TRIAL_CHANGES[outcome] === "passed";
       return {
         ...task,
         status: passed ? "passed" : "failed",
@@ -233,13 +263,21 @@ export default function LiveRunView() {
       failed: 0,
       flaky: 0,
       unmeasured: 0,
-      agentVersion: currentAgentVersion(envState).label,
-      envVersion: currentEnvVersion(env, envState).label,
+      agentVersion: runAgent,
+      envVersion: runEnv,
+      /* Run anyway on a world that can't answer some of the agent's tools —
+         recorded; calls to them come back as not measured. */
+      toolGap: toolFit(env, envState, { agent: runAgent, envVersion: runEnv }).missing.map((t) => t.name),
+      /* The graders applied when it ran — a later eval change must not
+         regrade history. */
+      evals: envState.evals,
+      /* And the cast of actors it ran with. */
+      actors: inputs.actors.map((a) => a.id),
       scenarioIds: scenarios.map((sc) => sc.id),
       repeats,
       partial: !!only,
       ordinal: Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1,
-      seed: 7,
+      seed: runId,
       twinWrites: null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,7 +296,8 @@ export default function LiveRunView() {
       label: only
         ? `${stats.total} scenario${stats.total === 1 ? "" : "s"} re-run`
         : `${env?.name} · ${stats.total} tasks`,
-      status: stats.failed === 0 && stats.total > 0 ? "passed" : "failed",
+      /* A run where nothing could be measured passed nothing. */
+      status: stats.total - stats.unmeasured > 0 && stats.failed === 0 && !stats.flaky ? "passed" : "failed",
       finishedAt: new Date().toISOString(),
       total: stats.total,
       passed: stats.passed,

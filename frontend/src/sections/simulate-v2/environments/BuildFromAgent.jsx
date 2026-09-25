@@ -111,7 +111,9 @@ export default function BuildFromAgent() {
   const [awaitReadAck, setAwaitReadAck] = useState(false);
   const [readAnswers, setReadAnswers] = useState(null);
 
-  const env = useMemo(() => (source ? derivedEnvironment(source) : null), [source]);
+  /* A new environment per build — minted once for this screen. */
+  const [buildId] = useState(() => `env-returns-line-${Date.now().toString(36)}`);
+  const env = useMemo(() => (source ? derivedEnvironment(source, { id: buildId }) : null), [source, buildId]);
   /* Depth is a property of generation, so changing it regenerates the pool
      rather than just relabelling the environment. */
   const scenarios = useMemo(
@@ -408,7 +410,7 @@ export default function BuildFromAgent() {
       /* PRD §10.2 AC-10.7: only append when the user has changed
          it from the default 3, so plain links stay clean. */
       const k = Number(trials);
-      if (Number.isFinite(k) && k >= 1 && k !== 1) {
+      if (Number.isFinite(k) && k >= 1) {
         params.set("trials", String(Math.min(20, Math.floor(k))));
       }
       const qs = params.toString();
@@ -489,11 +491,9 @@ export default function BuildFromAgent() {
 
   /*
     A build from an agent is a *fresh* environment at v1 — for both the agent
-    and the environment version — with no run history. But the derived env
-    reuses a fixed id that also seeds a demo (3 agent versions, a synthesised
-    v3 lineage, prior runs), so on first-see we reset the version state to v1
-    and clear the seeded runs. Fires once per env id, so drawer-added versions
-    and real runs later in the session are safe.
+    and the environment version — with no run history. Each build has its own
+    id, so this only ever initialises a new environment. Fires once per env
+    id, so drawer-added versions and real runs later in the session are safe.
   */
   const versionsSeededRef = useRef(null);
   useEffect(() => {
@@ -501,44 +501,32 @@ export default function BuildFromAgent() {
     if (versionsSeededRef.current === env.id) return;
     versionsSeededRef.current = env.id;
     const now = new Date().toISOString();
-    /* Two version stores get reset here — the env-level `agentVersions`
-       (read by header pill + Overview summary) AND the source agent's own
-       `versions[]` array (read by Manage-versions and the hero card). The
-       fixed-id demo reuse dragged stale versions into brand-new builds if
-       we only wiped the env-level list.
-
-       We also stamp `sourceKind` onto the agent from the current build's
-       `source.kind` — the AddAgent drawer's version-lock reads that field,
-       and the fixed-id demo state carries agents that predate the field.
-       Every rebuild is authoritative, so overwriting with the live pick
-       is correct. */
-    const seededV1 = {
-      id: "v1", label: "v1",
-      note: "Initial version",
-      via: envState.agent?.via,
-      values: envState.agent?.values || {},
-      connectedAt: now,
-    };
+    /* The environment is built from agent v1, so agent v1 is its test
+       subject from the start: the agent the source points at, attached here.
+       (A new build has no stored agent to reuse — it used to borrow one from
+       the demo state under the shared id.) v1's tools are read from its
+       source, and env v1's world is built to answer exactly those. */
+    const v1Tools = (env.tools || []).map((t) => ({ ...t }));
+    const agent = envState.agent
+      ? { ...envState.agent, sourceKind: source?.kind || envState.agent.sourceKind || "repo" }
+      : agentFromSource(source, env, now);
     dispatch({
       type: "patchEnvState",
       envId: env.id,
       patch: {
-        agent: envState.agent
-          ? {
-            ...envState.agent,
-            sourceKind: source?.kind || envState.agent.sourceKind || "repo",
-            versions: [seededV1],
-            activeVersionId: "v1",
-          }
-          : envState.agent,
+        agent,
         agentVersions: [
-          { id: "agent-v1", label: "v1", note: "First version connected to this environment.", reach: "endpoint", createdAt: now },
+          {
+            id: "agent-v1", label: "v1", note: "The version this environment was built from.",
+            reach: source?.kind === "platform" ? "platform" : "endpoint", createdAt: now, tools: v1Tools,
+            values: agent.values, via: agent.via, connectedAt: now,
+          },
         ],
         activeAgentVersion: "v1",
         envVersions: [
-          { id: `${env.id}-v1`, label: "v1", createdAt: now, note: "First build from the agent.", scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"] },
+          { id: `${env.id}-v1`, label: "v1", createdAt: now, note: "First build, read from agent v1.", scenarios: envState.scenarios?.length || 0, changed: ["contract", "seed"], tools: v1Tools, builtFor: "v1" },
         ],
-        envDerivedForAgent: "v1",
+        activeEnvVersion: "v1",
         runs: [],
       },
     });
@@ -803,7 +791,7 @@ function Header({
   const selectionCount = scenarioSelection?.ids?.length || 0;
   /* Repeats picker — same PRD AC-10.7 dial as the workspace header.
      Run simulation starts straight away with this value. */
-  const [headerTrials, setHeaderTrials] = useState(1);
+  const [headerTrials, setHeaderTrials] = useState(3);
   /*
     The environment stage builds three things — tool handlers, a seeded world
     and coded checks — none of which are "sub-goals" as this product uses the
@@ -2445,3 +2433,27 @@ function PipelineRow({ step }) {
 
 PipelineRow.propTypes = { step: PropTypes.object };
 
+/* The agent a build read, as the environment's source agent — the same
+   record shape the connect flow and the Agents panel use. */
+function agentFromSource(source, env, now) {
+  const kind = source?.kind || "repo";
+  const where = (source?.value || "").trim();
+  const values = ({
+    platform: { provider: source?.provider || "vapi", agentId: where, callDirection: "inbound" },
+    endpoint: { endpoint: where },
+    mcp: { mcpUrl: where },
+    upload: {},
+  })[kind] || { repoUrl: where };
+  const via = kind === "platform"
+    ? `${source?.provider || "Hosted"} assistant ${where}`.trim()
+    : kind === "upload" ? `Uploaded — ${where || "bundle"}` : `Read from ${where}`;
+  return {
+    typeId: env?.agentType,
+    values,
+    via,
+    sourceKind: kind,
+    location: where,
+    connectedAt: now,
+    note: "Environment source",
+  };
+}

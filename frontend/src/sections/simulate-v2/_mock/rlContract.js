@@ -19,6 +19,7 @@
  */
 import { MODALITY_FOR } from "./fidelity";
 import { getAgentType } from "./agentTypes";
+import { actorsOf } from "./actors";
 
 /* ── 1. modality adapter ─────────────────────────────────────────────────── */
 
@@ -163,7 +164,7 @@ export const transitionDynamics = (env, envState) => {
       id: "actors",
       label: "Actors",
       icon: "solar:users-group-two-rounded-linear",
-      value: `${(envState?.actors || []).length || 3} in this environment`,
+      value: `${actorsOf(env, envState).length} in this environment`,
       note: "Other parties with goals of their own, pulling against the task — a colleague arguing for something else, a supervisor with their own criteria. They are dynamics, not task: the persona states the goal, the actor pulls against it.",
       to: "actors",
     },

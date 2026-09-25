@@ -10,6 +10,10 @@ import {
 import Iconify from "src/components/iconify";
 import { getAgentType } from "../_mock/agentTypes";
 import AddAgentDrawer from "./agents/AddAgentDrawer";
+import { agentToolsFor, newToolsIn, toolFit } from "../_mock/toolFit";
+import { agentVersions, currentAgentVersion, nextAgentVersion } from "../_mock/versions";
+import { toolList } from "./toolFitParts";
+import { useEnvState } from "../store";
 
 /*
   Purple accent used to mark the environment source. Kept as a literal
@@ -61,7 +65,16 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
     `note`) mirror the active version so downstream code that reads
     them keeps working unchanged.
   */
-  const source = useMemo(() => normalizeAgentVersions(envState?.agent), [envState?.agent]);
+  /* The source agent's versions ARE the environment's agent versions — one
+     list (envState.agentVersions), read by the header, runs and fit checks.
+     The agent record only keeps each version's connection details. Two lists
+     used to be written by different paths and overwrote each other. */
+  const { addAgentVersion } = useEnvState(env.id);
+  const source = useMemo(
+    () => sourceWithEnvVersions(envState?.agent, envState),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [envState?.agent, envState?.agentVersions, envState?.activeAgentVersion],
+  );
   const additional = useMemo(
     () => (envState?.additionalAgents || []).map(normalizeAgentVersions),
     [envState?.additionalAgents],
@@ -137,31 +150,33 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
   const addVersion = (agentId, record) => {
     if (agentId === "source") {
       if (!source) return;
-      const next = mintNextVersion(source, record);
-      const nextVersions = [...(source.versions || []), next];
-      patch({
-        agent: applyActiveVersion({
-          ...source,
-          versions: nextVersions,
-          activeVersionId: next.id,
+      const next = {
+        ...nextAgentVersion(envState, {
+          note: record?.note,
+          reach: record?.via || "endpoint",
+          tools: record?.tools || null,
         }),
-        /* Keep the env-level version list (read by the header pill and the
-           Overview agent summary) in step with the source agent's own
-           versions[], so adding v2 here shows v2 everywhere — not just in
-           this drawer. */
-        agentVersions: nextVersions.map(toEnvAgentVersion),
-        activeAgentVersion: next.label,
+        values: record?.values || {},
+        via: record?.via,
+        connectedAt: record?.connectedAt || new Date().toISOString(),
+      };
+      /* Through the store's version action: it makes the new version the
+         active one and shares it with every environment testing this agent. */
+      addAgentVersion(next);
+      /* Top-level connection mirrors the active version for readers that
+         only know `agent.values` / `agent.via`. */
+      patch({
+        agent: { ...envState.agent, values: next.values, via: next.via, connectedAt: next.connectedAt, note: next.note },
       });
       /*
-        A new source version implicitly re-derives the environment:
-        contract, scenarios and evaluations all re-read from the new
-        agent. Fire a builder turn so the chat panel shows this
-        happening instead of quietly swapping under the user.
+        A new version plugs into the same environment — nothing is
+        re-derived. The builder says what it read and whether this world
+        can answer it.
       */
       if (onBuilderTurn) {
         onBuilderTurn(
-          `Re-deriving environment against ${next.label}`,
-          buildVersionUpgradeSteps({ agent: source, next }),
+          `Connected agent ${next.label}`,
+          buildVersionUpgradeSteps({ agent: source, next, env, envState: { ...envState, agentVersions: [...agentVersions(envState), next] } }),
         );
       }
     } else {
@@ -196,19 +211,18 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
       if (!source) return;
       const target = (source.versions || []).find((v) => v.id === versionId);
       const previous = (source.versions || []).find((v) => v.id === source.activeVersionId);
+      if (!target) return;
       patch({
-        agent: applyActiveVersion({ ...source, activeVersionId: versionId }),
-        /* Mirror the active pin to the env-level pointer the header and
-           Overview read, so a rollback shows there too. */
-        activeAgentVersion: target?.label,
+        activeAgentVersion: target.label,
+        agent: { ...envState.agent, values: target.values, via: target.via, connectedAt: target.connectedAt, note: target.note },
       });
-      if (onBuilderTurn && target) {
+      if (onBuilderTurn) {
         const prevIdx = (source.versions || []).findIndex((v) => v.id === source.activeVersionId);
         const nextIdx = (source.versions || []).findIndex((v) => v.id === versionId);
         const isRollback = nextIdx < prevIdx;
         onBuilderTurn(
-          `${isRollback ? "Rolling back" : "Switching"} to ${target.label} — re-deriving environment`,
-          buildVersionSwitchSteps({ agent: source, from: previous, to: target, isRollback }),
+          `${isRollback ? "Rolling back" : "Switching"} to ${target.label}`,
+          buildVersionSwitchSteps({ agent: source, from: previous, to: target, isRollback, env, envState: { ...envState, activeAgentVersion: target.label } }),
         );
       }
     } else {
@@ -345,7 +359,7 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
           the ACTIVE pill on the hero card right below.
         */}
         <Typography noWrap sx={{ typography: "s2", color: "text.secondary" }}>
-          One agent per environment. New versions re-derive its contract, scenarios and evaluations.
+          One agent per environment. New versions plug into the same world — its scenarios and evaluations apply as they are; a new tool only needs the world to learn it.
         </Typography>
       </Box>
 
@@ -368,6 +382,10 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
         <VersionHistoryCard
           agent={singleAgent}
           onSetActiveVersion={(vId) => setActiveVersion("source", vId)}
+          toolsOf={(label) => ({
+            count: agentToolsFor(env, envState, label).length,
+            added: newToolsIn(env, envState, label),
+          })}
         />
       </Box>
 
@@ -381,6 +399,8 @@ export default function AgentsPanel({ env, envState, patch, onGo, buildMode, onB
         env={env}
         editing={addingVersionFor}
         newVersion
+        baseTools={agentToolsFor(env, envState)}
+        baseLabel={envState?.activeAgentVersion || (envState?.agentVersions || []).slice(-1)[0]?.label || "v1"}
         onAdd={(record) => addVersion(addingVersionFor?.id, record)}
       />
 
@@ -611,7 +631,7 @@ function CredentialsCard() {
   a sequence, not a bulleted list, and the "latest at the top" order
   keeps the current state where the eye first lands.
 */
-function VersionHistoryCard({ agent, onSetActiveVersion }) {
+function VersionHistoryCard({ agent, onSetActiveVersion, toolsOf }) {
   const versions = agent.versions || [];
   const activeId = agent.activeVersionId || versions[versions.length - 1]?.id;
   const activeIdx = versions.findIndex((v) => v.id === activeId);
@@ -723,6 +743,15 @@ function VersionHistoryCard({ agent, onSetActiveVersion }) {
                       {v.note}
                     </Typography>
                   )}
+                  {toolsOf && (() => {
+                    const t = toolsOf(v.label);
+                    return (
+                      <Typography component="div" sx={{ typography: "s3", color: "text.subtitle", mt: 0.375 }}>
+                        Calls {t.count} tool{t.count === 1 ? "" : "s"}
+                        {t.added.length > 0 && <> · new in {v.label}: {toolList(t.added)}</>}
+                      </Typography>
+                    );
+                  })()}
                 </Box>
               </Stack>
             );
@@ -735,6 +764,7 @@ function VersionHistoryCard({ agent, onSetActiveVersion }) {
 VersionHistoryCard.propTypes = {
   agent: PropTypes.object.isRequired,
   onSetActiveVersion: PropTypes.func.isRequired,
+  toolsOf: PropTypes.func,
 };
 
 /* ── one card ─────────────────────────────────────────────────────────────── */
@@ -1631,6 +1661,27 @@ const DEFAULT_CONTRACT_STATS = { tools: 12, rules: 5, modality: "Voice" };
  * before versioning existed — has the same shape after normalisation.
  * Idempotent: an already-normalised agent passes through unchanged.
  */
+/* The source agent with its version stack read from the environment's one
+   list of agent versions. Each entry keeps the connection details it was
+   created with; the active one is the environment's active version. */
+function sourceWithEnvVersions(agent, envState) {
+  if (!agent) return agent;
+  const legacy = new Map((agent.versions || []).map((v) => [v.label, v]));
+  const versions = agentVersions(envState).map((v) => {
+    const old = legacy.get(v.label) || {};
+    return {
+      ...old,
+      ...v,
+      id: v.label,
+      values: v.values || old.values || agent.values || {},
+      via: v.via || old.via || agent.via,
+      connectedAt: v.connectedAt || old.connectedAt || v.createdAt,
+      note: v.note || old.note,
+    };
+  });
+  return { ...agent, versions, activeVersionId: currentAgentVersion(envState)?.label };
+}
+
 function normalizeAgentVersions(agent) {
   if (!agent) return agent;
   if (Array.isArray(agent.versions) && agent.versions.length > 0) return agent;
@@ -1650,18 +1701,6 @@ function normalizeAgentVersions(agent) {
  * the existing stack (`v1` → `v2` → `v3`). Not tied to time so the
  * label reads the same regardless of when the version was minted.
  */
-/* Map a source-agent version record onto the env-level agentVersions shape
-   the header pill + Overview summary read (see _mock/versions.js). */
-function toEnvAgentVersion(v) {
-  return {
-    id: v.id,
-    label: v.label,
-    note: v.note,
-    reach: v.via || v.reach || "endpoint",
-    createdAt: v.connectedAt || v.createdAt || new Date().toISOString(),
-  };
-}
-
 function mintNextVersion(agent, record) {
   const existing = agent.versions || [];
   const nextNumber = existing.length + 1;
@@ -1673,6 +1712,7 @@ function mintNextVersion(agent, record) {
     via: record?.via,
     connectedAt: record?.connectedAt || new Date().toISOString(),
     note: record?.note || `Version ${nextNumber}`,
+    ...(record?.tools && { tools: record.tools }),
   };
 }
 
@@ -1697,51 +1737,42 @@ function applyActiveVersion(agent) {
   };
 }
 
-/*
-  Builder-turn steps for the "new version landed → re-derive env"
-  flow. Not a full derivation; a short, believable chain that shows
-  the same shape the original agent-source derivation used, so the
-  user's chat panel narrates what the environment is now testing
-  against. Contract + scenarios + evals are the three surfaces the
-  user cares about — each gets one line.
-*/
-/*
-  Builder-turn steps for the "user switched between existing
-  versions" flow (either forward via Set active, or backward via
-  Roll back). Same shape as the version-upgrade turn — the env
-  re-derives against whichever version is now active — but the
-  narration reflects that the version already existed.
-*/
-function buildVersionSwitchSteps({ agent, from, to, isRollback }) {
+/* What connecting or switching a version is really about: which tools this
+   version calls, and whether the pinned world can answer them. Nothing about
+   the environment is re-derived. */
+function fitLines(env, envState, label) {
+  const calls = agentToolsFor(env, envState, label);
+  const added = newToolsIn(env, envState, label);
+  const fit = toolFit(env, envState, { agent: label });
+  return [
+    { kind: "tool", label: "read_tools()", result: `${calls.length} tools${added.length ? ` · new: ${added.map((t) => t.name).join(", ")}` : " · same as before"}` },
+    fit.fits
+      ? { kind: "note", text: `Environment ${fit.envVersion} answers every tool ${label} calls — its scenarios and evaluations apply as they are.` }
+      : { kind: "note", text: `Environment ${fit.envVersion} can't answer ${fit.missing.map((t) => t.name).join(", ")}. Rebuild the environment so the world learns ${fit.missing.length === 1 ? "it" : "them"}, or run anyway and those scenarios come back not measured.` },
+  ];
+}
+
+function buildVersionSwitchSteps({ agent, from, to, isRollback, env, envState }) {
   const typeLabel = getAgentType(agent?.typeId)?.label || "the agent";
   const fromLabel = from?.label || "the previous version";
   const via = to?.via || to?.values?.endpoint || agent?.via || "the version's endpoint";
   const verb = isRollback ? "Rolling back to" : "Switching to";
   return [
-    { kind: "think", text: `${verb} ${typeLabel} · ${to.label} (previously ${fromLabel}). Re-reading it and refreshing what depends on it.` },
+    { kind: "think", text: `${verb} ${typeLabel} · ${to.label} (previously ${fromLabel}).` },
     { kind: "tool", label: `read_agent(${via})`, result: `${to.label} · loaded` },
-    { kind: "tool", label: "extract_tools()", result: "12 tools · 1 signature differs from previous" },
-    { kind: "tool", label: "extract_rules()", result: "5 rules · unchanged" },
-    { kind: "note", text: `Contract regenerated against ${to.label}.` },
-    { kind: "tool", label: "re_derive_scenarios()", result: "88 kept · 2 archived (no longer solvable in this version)" },
-    { kind: "tool", label: "reevaluate_preset_evals()", result: "no changes" },
-    { kind: "note", text: `Environment now testing ${typeLabel} · ${to.label}. Runs from this point on are stamped with this version.` },
+    ...fitLines(env, envState, to.label),
+    { kind: "note", text: `Runs from this point on test ${to.label} and are stamped with it.` },
   ];
 }
 
-function buildVersionUpgradeSteps({ agent, next }) {
+function buildVersionUpgradeSteps({ agent, next, env, envState }) {
   const typeLabel = getAgentType(agent?.typeId)?.label || "the agent";
   const via = next?.via || agent?.via || next?.values?.endpoint || "the attached agent";
   return [
-    { kind: "think", text: `${typeLabel} · ${next.label} is now the version this environment tests against. Re-reading the agent and refreshing what depends on it.` },
+    { kind: "think", text: `${typeLabel} · ${next.label} plugs into this environment as the version the next run tests.` },
     { kind: "tool", label: `read_agent(${via})`, result: `${next.label} · loaded` },
-    { kind: "tool", label: "extract_tools()", result: "12 tools · 1 changed" },
-    { kind: "tool", label: "extract_rules()", result: "5 rules · no changes" },
-    { kind: "note", text: "Contract regenerated. Comparing against the previous version." },
-    { kind: "json", label: `contract diff · ${next.label} vs previous`, value: JSON.stringify({ tools_added: 0, tools_removed: 0, tool_signatures_changed: 1, rules_changed: 0 }, null, 2) },
-    { kind: "tool", label: "re_derive_scenarios()", result: "88 kept · 2 archived (no longer solvable)" },
-    { kind: "tool", label: "reevaluate_preset_evals()", result: "no changes" },
-    { kind: "note", text: `Environment is now testing ${typeLabel} · ${next.label}. Runs from this point on are stamped with the new version.` },
+    ...fitLines(env, envState, next.label),
+    { kind: "note", text: `Runs from this point on test ${next.label} and are stamped with it.` },
   ];
 }
 

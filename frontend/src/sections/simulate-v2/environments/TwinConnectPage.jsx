@@ -24,6 +24,10 @@ import FitCheckDialog from "./FitCheckDialog";
  * scripted fit-check probe, then hands the user off to the twin-review
  * layout (chat left + workspace tabs right).
  *
+ * The probe reports both directions (see compatibility.js): tools the agent
+ * calls that the world can't answer block a clean run; world tools the agent
+ * lacks do not — those scenarios measure the agent's gap.
+ *
  * Mirrors step 0 of the template flow in UseTemplate so a user landing
  * here recognises the shape immediately.
  */
@@ -31,7 +35,7 @@ export default function TwinConnectPage() {
   const { envId } = useParams();
   const navigate = useNavigate();
   const { state } = useSimStore();
-  const { patch } = useEnvState(envId);
+  const { envState, patch } = useEnvState(envId);
   const env = state.myEnvironments.find((e) => e.id === envId);
 
   const type = useMemo(() => getAgentType("twin_backed"), []);
@@ -62,7 +66,7 @@ export default function TwinConnectPage() {
   const optional = (type?.fields || []).filter((f) => !f.required);
   const missing = required.filter((f) => !values[f.key]);
   const services = env.twinBacking?.services || [];
-  const fit = checkCompatibility(env);
+  const fit = checkCompatibility(env, envState);
 
   const commitAgent = () => {
     /* Patch the env with the agent connection so the workspace's
@@ -94,7 +98,7 @@ export default function TwinConnectPage() {
               Connect your agent
             </Typography>
             <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-              {env.name} is provisioned. Point your agent at the sandbox — the fit-check probes it before you land in the workspace.
+              {env.name} is provisioned. Point your agent at the sandbox — the fit-check compares the tools it calls with what this world answers.
             </Typography>
           </Box>
         </Stack>

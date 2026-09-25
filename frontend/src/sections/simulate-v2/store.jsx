@@ -18,6 +18,16 @@ import {
 import { seededState } from "./_mock/seedState";
 import { getEnvironment } from "./_mock/environments";
 import { generatedPool } from "./_mock/scenarios";
+import { agentVersions } from "./_mock/versions";
+
+/* Which agent this is, across environments: where it lives. Two
+   environments connected to the same repo, endpoint or hosted assistant are
+   testing one agent. */
+const agentKeyOf = (agent) => {
+  const v = agent?.values || {};
+  const where = v.agentId || v.repoUrl || v.endpoint || v.sdkEndpoint || v.mcpUrl || agent?.location || null;
+  return where ? `${v.provider || agent?.sourceKind || "agent"}:${String(where).toLowerCase()}` : null;
+};
 
 /*
   Versioned: the seeded first-run environments only reach anyone whose browser
@@ -155,13 +165,9 @@ function reducer(state, action) {
       });
       const nextByEnv = { ...(payload.byEnv || {}) };
       /*
-        Refresh envState.scenarios for template-based envs too.
-        Run again reads from envState.scenarios, which was frozen at
-        adoption time — without this step, prototype-time additions
-        to the env's tools/rules never reach a fresh run's task list.
-        Only refreshes when the stored scenario list would be
-        smaller than the template's current generated pool, so a
-        user who deliberately trimmed scenarios keeps their pick.
+        Template-based envs get their scenario pool filled in on load when a
+        cached state has none. Existing lists — and the runs that ran them —
+        are never rewritten.
       */
       envs.forEach((env) => {
         const es = nextByEnv[env.id];
@@ -180,24 +186,17 @@ function reducer(state, action) {
         const fromTemplate = !!getEnvironment(env.id) || es.scenarioSource === "templates";
         if (!fromTemplate) return;
         /*
-           Prototype demo path: unconditionally refresh from the
-           template. Wrapped in try/catch — if scenario generation
-           throws on a partial env (missing seed.tables, missing
-           rules, unfamiliar shape from an older cache), the whole
-           hydrate must NOT crash: a crash leaves the reducer at
-           initialState, the persist effect then writes that empty
-           state, and the user's environments disappear on next
-           load. Skipping just this env is the safe fallback.
+           Fill a template env's scenarios only when it has none — a cache from
+           before the scenario pool existed. Never refresh a list that exists:
+           that brought deleted rows back, dropped proof stamps and edits, and
+           (worse) rewrote every past run's scenario set, so a four-scenario
+           re-run read as a full sweep after a reload. A run keeps what it ran.
         */
+        if ((es.scenarios || []).length) return;
         try {
-          const fresh = generatedPool(env);
-          if (!Array.isArray(fresh) || !fresh.length) return;
-          const freshIds = fresh.map((sc) => sc.id);
-          const nextRuns = (es.runs || []).map((r) => {
-            if (r.synthetic) return r;
-            return { ...r, scenarioIds: freshIds, total: fresh.length };
-          });
-          nextByEnv[env.id] = { ...es, scenarios: fresh, runs: nextRuns };
+          const pool = generatedPool(env);
+          if (!Array.isArray(pool) || !pool.length) return;
+          nextByEnv[env.id] = { ...es, scenarios: pool };
         } catch (err) {
           /* Prototype cache mismatch — leave this env alone. */
           // eslint-disable-next-line no-console
@@ -303,14 +302,30 @@ function reducer(state, action) {
        so minting is the only thing that moves the pairing forward. */
     case "addAgentVersion": {
       const prev = state.byEnv[action.envId] || emptyEnvState();
-      const list = prev.agentVersions?.length ? prev.agentVersions : [];
-      return {
-        ...state,
-        byEnv: {
-          ...state.byEnv,
-          [action.envId]: { ...prev, agentVersions: [...list, action.version] },
-        },
+      /* Start from the list every reader sees — including the implicit v1 —
+         or the first new version would replace v1 instead of following it. */
+      const list = agentVersions(prev);
+      const byEnv = {
+        ...state.byEnv,
+        /* A new version is the one the next run tests. */
+        [action.envId]: { ...prev, agentVersions: [...list, action.version], activeAgentVersion: action.version.label },
       };
+      /*
+        An agent version belongs to the agent, not to one environment. Every
+        other environment testing the same agent learns that the version
+        exists (it doesn't switch to it — each environment chooses what it
+        runs), so "v2" means the same thing everywhere.
+      */
+      const key = agentKeyOf(prev.agent);
+      if (key) {
+        Object.entries(state.byEnv).forEach(([id, es]) => {
+          if (id === action.envId || agentKeyOf(es?.agent) !== key) return;
+          const theirs = agentVersions(es);
+          if (theirs.some((v) => v.label === action.version.label)) return;
+          byEnv[id] = { ...es, agentVersions: [...theirs, action.version] };
+        });
+      }
+      return { ...state, byEnv };
     }
 
     case "release": {

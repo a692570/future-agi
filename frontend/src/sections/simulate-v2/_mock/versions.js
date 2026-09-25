@@ -23,46 +23,21 @@ const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString()
  * world change that invalidates a proof is visible rather than silent.
  */
 export const environmentVersions = (env, envState) => {
-  /* Minted versions win; the seeded three are what an environment starts life
-     with. Both shapes are identical, so nothing downstream can tell which is
-     which — and nothing downstream should care. */
+  /* Minted versions win. An environment with none recorded has exactly one:
+     its first build. (It used to be handed an invented three-version history,
+     so an environment created a minute ago claimed a v1 "read from the agent
+     source" three weeks old.) Environments with a real history — the seeded
+     demo ones — carry it in their state like any other. */
   const stored = envState?.envVersions;
-  const list = stored?.length ? [...stored].reverse() : (() => {
-    /*
-      The seeded history counts against the scenarios this environment
-      actually has. It used to carry 32 / 28 / 21 as literals, which put
-      "32 scenarios" in the version bar above a runs table that never
-      showed more than nine.
-    */
-    const now = envState?.scenarios?.length || 0;
-    const back = (n) => Math.max(1, Math.round(now * n));
-    return [
-      {
-        id: `${env?.id}-v3`,
-        label: "v3",
-        createdAt: iso(2),
-        note: "Seeded the refusal paths so the scenarios that should be declined have something to be declined against.",
-        scenarios: now,
-        changed: ["seed", "checks"],
-      },
-      {
-        id: `${env?.id}-v2`,
-        label: "v2",
-        createdAt: iso(11),
-        note: "Moved a rule out of the prompt and into the world, so breaking it now fails rather than reads badly.",
-        scenarios: back(0.78),
-        changed: ["rules"],
-      },
-      {
-        id: `${env?.id}-v1`,
-        label: "v1",
-        createdAt: iso(24),
-        note: "First build, read from the agent source.",
-        scenarios: back(0.55),
-        changed: ["contract", "seed"],
-      },
-    ];
-  })();
+  const list = stored?.length ? [...stored].reverse() : [{
+    id: `${env?.id}-v1`,
+    label: "v1",
+    createdAt: env?.adoptedAt || new Date().toISOString(),
+    note: envState?.agent ? "First build, read from the agent." : "First build.",
+    scenarios: envState?.scenarios?.length || 0,
+    changed: ["contract", "seed"],
+    builtFor: "v1",
+  }];
 
   /*
     Stamp `.current` based on the active version pointer, so the version
@@ -72,6 +47,32 @@ export const environmentVersions = (env, envState) => {
   */
   const active = envState?.activeEnvVersion || list[0]?.label;
   return list.map((v) => ({ ...v, current: v.label === active }));
+};
+
+/**
+ * A history for the seeded demo environments, oldest first — the same three
+ * steps the fallback used to invent for every environment, now stated once
+ * for the environments that actually have that history.
+ */
+export const seededEnvHistory = (env, scenarioCount) => {
+  const back = (n) => Math.max(1, Math.round((scenarioCount || 0) * n));
+  return [
+    {
+      id: `${env?.id}-v1`, label: "v1", createdAt: iso(24),
+      note: "First build, read from the agent source.",
+      scenarios: back(0.55), changed: ["contract", "seed"], builtFor: "v1",
+    },
+    {
+      id: `${env?.id}-v2`, label: "v2", createdAt: iso(11),
+      note: "Moved a rule out of the prompt and into the world, so breaking it now fails rather than reads badly.",
+      scenarios: back(0.78), changed: ["rules"], builtFor: "v1",
+    },
+    {
+      id: `${env?.id}-v3`, label: "v3", createdAt: iso(2),
+      note: "Seeded the refusal paths so the scenarios that should be declined have something to be declined against.",
+      scenarios: scenarioCount || 0, changed: ["seed", "checks"], builtFor: "v1",
+    },
+  ];
 };
 
 /**
@@ -88,13 +89,21 @@ export const ENV_CHANGES = [
   { id: "checks", label: "Rewrote the checks", invalidates: true, blurb: "A check proved to fail on an empty run may now pass." },
   { id: "contract", label: "Tools changed", invalidates: true, blurb: "The reference solution may no longer run." },
   { id: "rules", label: "Rules changed", invalidates: false, blurb: "Graded differently; every scenario can still be staged." },
+  { id: "scoring", label: "Graders changed", invalidates: false, blurb: "Evaluations or thresholds changed — runs before and after were graded differently." },
+  { id: "actors", label: "Actors changed", invalidates: false, blurb: "Who else acts in the world changed — the episodes play out differently." },
 ];
 
 /** The next environment version, given what already exists. */
-export const nextEnvVersion = (env, envState, { changed = [], note, now } = {}) => {
+export const nextEnvVersion = (env, envState, { changed = [], note, now, from } = {}) => {
   const list = environmentVersions(env, envState);
   const n = list.length + 1;
+  /* A new version starts from the world it replaces — the pinned one unless
+     told otherwise — so tools the world learned in a rebuild are not lost to
+     a rules change made afterwards. */
+  const base = (from && list.find((v) => v.label === from)) || list.find((v) => v.current) || list[0];
   return {
+    ...(base?.tools && { tools: base.tools }),
+    builtFor: base?.builtFor || "v1",
     id: `${env?.id}-v${n}`,
     label: `v${n}`,
     createdAt: now || new Date().toISOString(),
@@ -167,17 +176,25 @@ export const currentAgentVersion = (envState) => {
  *   fromRunId       — the run whose diagnosis produced these changes, so the
  *                     evidence lives beside the outcome.
  */
-export const nextAgentVersion = (envState, { note, reach = "endpoint", now, applied = [], fromRunId = null, basedOnVersion = null } = {}) => {
+export const nextAgentVersion = (envState, {
+  note, reach = "endpoint", now, applied = [], fromRunId = null, basedOnVersion = null, tools = null,
+} = {}) => {
   const list = agentVersions(envState);
-  const n = list.length + 1;
+  /* Numbered past the highest label, not the count — a count can collide. */
+  const n = Math.max(0, ...list.map((v) => versionNumber(v.label))) + 1;
   return {
+    /* Only when this version's tools are known to differ; otherwise it
+       inherits the tools of the version it was built on. */
+    ...(tools && { tools }),
     id: `agent-v${n}`,
     label: `v${n}`,
     note: note || "Modified between runs.",
     reach,
     createdAt: now || new Date().toISOString(),
     applied,
-    basedOnVersion: basedOnVersion || list[list.length - 1]?.label || "v1",
+    /* The version these changes were made on — the one being tested now,
+       not simply the newest. */
+    basedOnVersion: basedOnVersion || currentAgentVersion(envState)?.label || "v1",
     fromRunId,
   };
 };

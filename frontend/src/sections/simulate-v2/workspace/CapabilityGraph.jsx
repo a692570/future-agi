@@ -6,7 +6,7 @@ import { SegmentedTabs } from "src/components/tabs/tabs";
 import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
 import { contractFor } from "../_mock/contract";
-import { ACTOR_LIBRARY, castFor as actorCastFor } from "../_mock/actors";
+import { ACTOR_LIBRARY, actorsOf } from "../_mock/actors";
 
 /**
  * The capability graph.
@@ -34,7 +34,7 @@ export default function CapabilityGraph({ env, envState, onGo }) {
   const [focus, setFocus] = useState(null);
   const contract = contractFor(env);
 
-  const actorIds = envState?.actors || actorCastFor(env);
+  const actorIds = actorsOf(env, envState);
   /*
     Personas are derived from scenarios now — dedupe by slug so a graph
     that used to show a placeholder library shows the archetypes

@@ -47,7 +47,7 @@ export default function FitCheckDialog({ open, probeSteps, onDone }) {
           <Box flex={1} minWidth={0}>
             <Typography sx={{ typography: "m2", fontWeight: 700 }}>Checking your agent fits</Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-              Probing declared tools against what this template calls
+              Probing the tools your agent calls against what this world answers
             </Typography>
           </Box>
         </Stack>

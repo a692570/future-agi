@@ -1,10 +1,8 @@
 import PropTypes from "prop-types";
-import { useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Button, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { currentEnvVersion, currentAgentVersion, nextAgentVersion } from "../_mock/versions";
-import NewAgentVersion from "./NewAgentVersion";
+import { currentEnvVersion, currentAgentVersion } from "../_mock/versions";
 
 /**
  * What is being tested, against what.
@@ -27,10 +25,9 @@ import NewAgentVersion from "./NewAgentVersion";
  * step, against real recorded runs rather than a summary of two — and two
  * doors to one room means the smaller one is always the disappointing one.
  */
-export default function VersionBar({ env, envState, scenarioCount = 0, onAddVersion, onRunAfterVersion, patch }) {
+export default function VersionBar({ env, envState }) {
   const envV = currentEnvVersion(env, envState);
   const agentV = currentAgentVersion(envState);
-  const [adding, setAdding] = useState(false);
 
   return (
     <Stack
@@ -77,20 +74,6 @@ export default function VersionBar({ env, envState, scenarioCount = 0, onAddVers
 
       <Box flex={1} />
 
-      <NewAgentVersion
-        env={env}
-        envState={envState}
-        scenarioCount={scenarioCount}
-        open={adding}
-        onClose={() => setAdding(false)}
-        onCreate={(note) => {
-          onAddVersion?.(nextAgentVersion(envState, { note }));
-          /* The loop only closes if something closes it. A suite that has to be
-             remembered is a suite that gets run the day before a release and
-             never in between. */
-          if (envState?.autoRun) onRunAfterVersion?.();
-        }}
-      />
 
     </Stack>
   );
@@ -99,9 +82,5 @@ export default function VersionBar({ env, envState, scenarioCount = 0, onAddVers
 VersionBar.propTypes = {
   env: PropTypes.object,
   envState: PropTypes.object,
-  onAddVersion: PropTypes.func,
-  onRunAfterVersion: PropTypes.func,
-  patch: PropTypes.func,
-  scenarioCount: PropTypes.number,
 };
 

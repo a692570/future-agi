@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useContext, useEffect, useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
@@ -10,6 +10,8 @@ import { subTasksFor } from "../../_mock/contract";
 import { ProvenanceGlyph } from "../ScenariosStep";
 import { sourceOf, relativeTime } from "../../_mock/scenarioProvenance";
 import { admissionOf } from "../../_mock/coverage";
+import { versionNumber } from "../../_mock/versions";
+import { ScenarioRowContext } from "./scenarioRowContext";
 
 /* Neutral white-on-selected checkbox — no primary colour, keeps the
    table's monochrome treatment. */
@@ -32,7 +34,86 @@ const selectableCheckboxSx = {
  * Same rows, same derivations as the coverage matrix — nothing here is a
  * second source of truth.
  */
-export default function ScenarioTable({ rows, groups, env, onEdit, onRemove, onHideGroup, selectedIds, onSelectionChange, locked = false }) {
+/* A scenario a later rebuild added is not part of an older pinned version. */
+const laterThanPinned = (row, envVersion) => !!(row?.addedInEnv && envVersion
+  && versionNumber(row.addedInEnv) > versionNumber(envVersion));
+
+function StatusChip({ status }) {
+  const tone = status.tone;
+  return (
+    <Tooltip arrow title={status.detail || ""}>
+      <Box
+        sx={{
+          display: "inline-flex", alignItems: "center", gap: 0.625,
+          height: 22, px: 0.875, borderRadius: 0.75, border: "1px solid",
+          borderColor: tone ? alpha(tone, 0.4) : "divider",
+          bgcolor: (t) => (tone ? alpha(tone, t.palette.mode === "dark" ? 0.12 : 0.06) : "transparent"),
+          color: tone || "text.secondary",
+        }}
+      >
+        {status.id === "proved" && <Iconify icon="solar:check-circle-linear" width={12} sx={{ color: "text.disabled" }} />}
+        <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{status.label}</Typography>
+      </Box>
+    </Tooltip>
+  );
+}
+StatusChip.propTypes = { status: PropTypes.object.isRequired };
+
+/*
+  The tools a scenario needs, read against both sides of the pairing:
+    the world can't answer it   → amber: the scenario comes back not measured
+    the agent doesn't call it   → dashed: the scenario still runs, and
+                                  measures that gap in the agent
+*/
+function ToolChips({ tools, answers, agentCalls, agentLabel, envVersion }) {
+  if (!tools.length) {
+    return (
+      <Tooltip arrow title="Not tied to one tool — it tests how the agent behaves across the call.">
+        <Typography sx={{ typography: "s3", color: "text.disabled" }}>Any</Typography>
+      </Tooltip>
+    );
+  }
+  return (
+    <Stack direction="row" spacing={0.5} rowGap={0.5} flexWrap="wrap">
+      {tools.map((t) => {
+        const unanswered = answers && !answers.has(t);
+        const notCalled = !unanswered && agentCalls && !agentCalls.has(t);
+        const tip = unanswered
+          ? `Environment ${envVersion || ""} can't answer ${t} — this scenario comes back not measured until the environment is rebuilt.`
+          : notCalled
+            ? `Agent ${agentLabel || ""} doesn't call ${t}. The scenario still runs — it measures that gap in the agent.`
+            : "";
+        return (
+          <Tooltip key={t} arrow title={tip}>
+            <Box
+              sx={{
+                px: 0.625, height: 20, display: "inline-flex", alignItems: "center", borderRadius: 0.5,
+                bgcolor: notCalled ? "transparent" : "action.hover",
+                border: notCalled ? "1px dashed" : "1px solid transparent",
+                borderColor: notCalled ? "text.disabled" : "transparent",
+                color: unanswered ? "#CA8A04" : notCalled ? "text.subtitle" : "text.secondary",
+              }}
+            >
+              <Typography noWrap sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11, color: "inherit" }}>{t}</Typography>
+            </Box>
+          </Tooltip>
+        );
+      })}
+    </Stack>
+  );
+}
+ToolChips.propTypes = {
+  tools: PropTypes.array.isRequired,
+  answers: PropTypes.object,
+  agentCalls: PropTypes.object,
+  agentLabel: PropTypes.string,
+  envVersion: PropTypes.string,
+};
+
+export default function ScenarioTable({
+  rows, groups, env, envVersion, onEdit, onRemove, onHideGroup, selectedIds, onSelectionChange, locked = false,
+}) {
+  const { statusOf, toolsOf, answers, agentCalls, agentLabel } = useContext(ScenarioRowContext);
   /*
     Two shapes come in: pre-grouped (list view mirror) or a flat rows
     array (fallback). If groups are given, render section-header rows
@@ -128,14 +209,14 @@ export default function ScenarioTable({ rows, groups, env, onEdit, onRemove, onH
     not a run's actual result.
   */
   const columns = [
-    "select", "#", "Scenario", "Persona", "Situation",
-    "Sub-goals", "Ideal outcome", "",
+    "select", "#", "Scenario", "Status", "Persona", "Situation",
+    "Sub-goals", "Tools it needs", "Ideal outcome", "",
   ];
   let counter = 0;
 
   return (
     <Box sx={{ overflowX: "auto" }}>
-      <Table size="small" sx={{ minWidth: 1400 }}>
+      <Table size="small" sx={{ minWidth: 1640 }}>
         <TableHead>
           <TableRow>
             {columns.map((h, i) => {
@@ -261,6 +342,26 @@ export default function ScenarioTable({ rows, groups, env, onEdit, onRemove, onH
                     <TruncTooltip title={row.name || row.title}>
                       <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.name || row.title}</Typography>
                     </TruncTooltip>
+                    {row.newTool && (
+                      <Tooltip
+                        arrow
+                        title={laterThanPinned(row, envVersion)
+                          ? `Added when environment ${row.addedInEnv} learned ${row.newTool}. It isn't part of environment ${envVersion}, so runs on ${envVersion} leave it out.`
+                          : `Added when environment ${row.addedInEnv} learned ${row.newTool}`}
+                      >
+                        <Box
+                          sx={{
+                            display: "inline-flex", alignItems: "center", flexShrink: 0,
+                            height: 16, px: 0.5, borderRadius: 0.5,
+                            border: "1px solid", borderColor: "divider", color: "text.secondary",
+                          }}
+                        >
+                          <Typography sx={{ typography: "s3", fontWeight: 700 }}>
+                            {laterThanPinned(row, envVersion) ? `Needs env ${row.addedInEnv}` : `New · env ${row.addedInEnv}`}
+                          </Typography>
+                        </Box>
+                      </Tooltip>
+                    )}
                     {row.provedBroke && (
                       <Tooltip arrow title="Broke when the env changed — the proof no longer holds.">
                         <Box
@@ -314,6 +415,13 @@ export default function ScenarioTable({ rows, groups, env, onEdit, onRemove, onH
                   </TruncTooltip>
                 </TableCell>
 
+                {/* STATUS — one answer to "can I trust this row?", with the
+                    reason on hover. Same status the Needs attention chip
+                    counts. */}
+                <TableCell sx={{ verticalAlign: "top", whiteSpace: "nowrap" }}>
+                  {statusOf && <StatusChip status={statusOf(row)} />}
+                </TableCell>
+
                 {/* PERSONA — name + gender/age line */}
                 <TableCell sx={{ maxWidth: 200, verticalAlign: "top" }}>
                   <TruncTooltip title={p?.name || ""}>
@@ -337,6 +445,18 @@ export default function ScenarioTable({ rows, groups, env, onEdit, onRemove, onH
                     hover popover for the full list. */}
                 <TableCell sx={{ maxWidth: 260, verticalAlign: "top" }}>
                   <SubTasksCell subTasks={subTasks} />
+                </TableCell>
+
+                {/* TOOLS IT NEEDS — the tools the world must answer for
+                    this scenario; amber when the pinned world can't. */}
+                <TableCell sx={{ maxWidth: 220, verticalAlign: "top" }}>
+                  <ToolChips
+                    tools={toolsOf ? toolsOf(row) : (row.requiredTools || [])}
+                    answers={answers}
+                    agentCalls={agentCalls}
+                    agentLabel={agentLabel}
+                    envVersion={envVersion}
+                  />
                 </TableCell>
 
                 {/* IDEAL OUTCOME — clamped to 3 lines, tooltip on
@@ -399,11 +519,13 @@ ScenarioTable.propTypes = {
   rows: PropTypes.array.isRequired,
   groups: PropTypes.array,
   env: PropTypes.object,
+  envVersion: PropTypes.string,
   onEdit: PropTypes.func,
   onRemove: PropTypes.func,
   onHideGroup: PropTypes.func,
   selectedIds: PropTypes.array,
   onSelectionChange: PropTypes.func,
+  locked: PropTypes.bool,
 };
 
 /* ── readability helpers ──────────────────────────────────────────────────── */

@@ -1446,7 +1446,9 @@ function EvalCard({ grader, tasks }) {
   const topPattern = [...patternCount.entries()].sort((a, b) => b[1] - a[1])[0];
 
   const tone = pct == null ? NEUTRAL : pct >= 80 ? PASS : pct >= 50 ? AMBER : FAIL;
-  const threshold = 0.8;
+  /* Each eval carries its own pass line (test pass rate needs 1.0, reward
+     0.7…) — the histogram band has to sit where this eval draws it. */
+  const threshold = grader.threshold ?? 0.8;
   const softBorder = `1px solid ${alpha(theme.palette.text.primary, dark ? 0.06 : 0.05)}`;
 
   /* Radial gauge — hollow ring, colored arc for pct, big number inside. */

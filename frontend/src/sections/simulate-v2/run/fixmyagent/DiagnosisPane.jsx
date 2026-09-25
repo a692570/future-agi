@@ -8,7 +8,6 @@ import { outcomeOf } from "../taskOutcome";
 import TaskLinks from "./TaskLinks";
 import CallScanStrip from "./CallScanStrip";
 import OmegaHandoff from "../OmegaHandoff";
-import NewAgentVersion from "../NewAgentVersion";
 import ImaginePane from "./ImaginePane";
 
 /**
@@ -103,7 +102,7 @@ export default function DiagnosisPane({
   tasks, report, trace, proposals, verdict,
   applied, setApplied, current, projected, willFix,
   measured, failing, onOpenTask, onViewIssue, onOptimize, onClose,
-  env, envState, patch, onHandOff, onCreateAgentVersion, onRunNewVersion, runId,
+  env, envState, patch, onHandOff, runId,
 }) {
   /* First open of this runId: play the analyzer animation. Every
      subsequent open in this session: skip straight to the results. */
@@ -132,11 +131,6 @@ export default function DiagnosisPane({
     setPhase("running");
   };
   const [handoff, setHandoff] = useState(false);
-  /* The new primary path: fork the agent code, apply the accepted changes,
-     mint the next agent version. The old "hand off as PR / patch / ticket"
-     stays as a secondary alternative for teams that want the diff in a
-     review tool rather than as a bundled version. */
-  const [versioning, setVersioning] = useState(false);
   const [open, setOpen] = useState({});
   const [showDiagnosis, setShowDiagnosis] = useState(true);
   /* Diagnosis is the fixed six-analyzer read; Imagine is the freeform
@@ -471,33 +465,6 @@ export default function DiagnosisPane({
             </Collapse>
 
             {/*
-              Create a new agent version from the diagnosis.
-
-              The primary product concept: because the environment was built
-              from the agent's own source, we hold the code. When a diagnosis
-              produces changes worth making, we can fork the current agent —
-              apply the accepted diffs — and mint it as the next agent
-              version, right here. The user then runs the new version against
-              the same environment and the compare feature reads v1 against
-              v2 on the same scenarios.
-            */}
-            {!running && versioning && !!included.length && (
-              <Box sx={{ px: 2.5, pt: 2.5 }}>
-                <NewAgentVersion
-                  env={env}
-                  envState={envState}
-                  included={included}
-                  projected={projected}
-                  current={current}
-                  willFix={willFix}
-                  onCreate={({ note, applied: appliedChanges }) =>
-                    onCreateAgentVersion?.(appliedChanges, projected, note)}
-                  onRun={(version) => onRunNewVersion?.(version)}
-                />
-              </Box>
-            )}
-
-            {/*
               Hand off without minting a version.
 
               Kept as the quieter alternative — a tool description one
@@ -735,7 +702,7 @@ export default function DiagnosisPane({
               <Button
                 size="small"
                 disabled={running || !included.length}
-                onClick={() => { setHandoff((v) => !v); setVersioning(false); }}
+                onClick={() => setHandoff((v) => !v)}
                 sx={{
                   typography: "s3", fontWeight: 600,
                   color: "text.subtitle",
@@ -775,6 +742,4 @@ DiagnosisPane.propTypes = {
   envState: PropTypes.object,
   patch: PropTypes.func,
   onHandOff: PropTypes.func,
-  onCreateAgentVersion: PropTypes.func,
-  onRunNewVersion: PropTypes.func,
 };

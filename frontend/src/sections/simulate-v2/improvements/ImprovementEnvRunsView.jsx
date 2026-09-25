@@ -2,7 +2,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Box, Stack, Typography, Button } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
-import { useSimStore } from "../store";
+import { useEnvState, useSimStore } from "../store";
+import useRunFitCheck from "../run/useRunFitCheck";
 import { protoRunId } from "../_mock/executionAdapter";
 import RunsSummary from "../run/RunsSummary";
 
@@ -24,6 +25,8 @@ export default function ImprovementEnvRunsView() {
   const { state } = useSimStore();
   const env = (state.myEnvironments || []).find((e) => e.id === envId);
   const envState = state.byEnv?.[envId];
+  const { patch } = useEnvState(envId);
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
 
   if (!env || !envState) {
     return (
@@ -48,10 +51,10 @@ export default function ImprovementEnvRunsView() {
      behaviour as the env's own Runs tab. The new run is recorded in
      the env store from inside the run detail, so it appears in the
      RunsSummary table as soon as we return here. */
-  const startRun = () => {
+  const startRun = () => checkRunFit(() => {
     const runId = protoRunId(env.id, Date.now().toString(36));
     navigate(paths.dashboard.simulate.simulationRun(env.id, runId));
-  };
+  });
 
   /* onGo routes to the env's workspace at the requested step. Clicking
      Edit evals from here takes you to the env's Evals tab, where the
@@ -62,6 +65,7 @@ export default function ImprovementEnvRunsView() {
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {runFitDialog}
       {/* header */}
       <Stack
         direction="row" alignItems="center" spacing={1.5}

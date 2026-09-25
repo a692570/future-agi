@@ -312,6 +312,10 @@ const SEED = [
   { name: "policies", rows: 12, note: "window, exclusions, credit cap" },
 ];
 
+/* The tools a build is narrating: the source's own when it carries them (a
+   template, a twin, a scratch build), else the agent's read from its code. */
+const toolsOfSource = (source) => (Array.isArray(source?.tools) ? source.tools : TOOLS);
+
 const STAGES = {
   understand: (source) => ({
     title: "Understanding the agent",
@@ -319,7 +323,9 @@ const STAGES = {
       think(`Reading ${source.value} — entrypoint, tool registry, prompt package.`),
       tool("read_source", "142 files · Python 3.12 · Dockerfile, db/schema.sql"),
       think("Taking each tool's signature from the code rather than its name, so the arguments and their permitted values are exact."),
-      tool("extract_tools", `${TOOLS.length} tools · 9 with required arguments`),
+      tool("extract_tools", toolsOfSource(source).length
+        ? `${toolsOfSource(source).length} tools${source?.tools ? "" : " · 9 with required arguments"}`
+        : "no tools yet — the world will answer whatever the first agent you connect calls"),
       json("issue_refund", "order_id: str · amount: float · caller_confirmed: bool (must be true)"),
       think("Separating rules the code enforces from rules only the prompt states — the second kind is where agents drift."),
       tool("extract_rules", `${RULES.length} hard rules · 2 enforced in code, 2 prompt-only, 1 found in prose`),
@@ -333,11 +339,13 @@ const STAGES = {
     chips: ["build the world →", "show me the tools"],
   }),
 
-  build: () => ({
+  build: (source) => ({
     title: "Building the world its tools act on",
     steps: [
       think("The agent's tools have to hit something that answers truthfully, including a truthful refusal."),
-      tool("write_handlers", `${TOOLS.length} handlers · one per tool`),
+      tool("write_handlers", toolsOfSource(source).length
+        ? `${toolsOfSource(source).length} handlers · one per tool`
+        : "no handlers yet — written when an agent's tools are read"),
       think("Seeding what the use cases need, including the awkward rows — a world of happy customers proves nothing."),
       tool("seed_world", "1,437 rows across 5 tables"),
       json("seeded_edges", "18% of orders outside the window · 22 excluded items · 9 expired cards · 12 guests"),
@@ -427,11 +435,25 @@ export const builderRun = (stage, source, text = "") => {
 };
 
 /** What the builder hands to the workspace when the user accepts it. */
-export const derivedEnvironment = (source) => ({
-  id: "env-returns-line",
-  agentType: "voice_platform",
+/* How the agent is reached follows what was connected: a voice platform or
+   voice repo stays voice, an HTTP endpoint or an MCP server is a chat agent. */
+const REACH_BY_MODALITY = {
+  voice: { agentType: "voice_platform", surface: "voice" },
+  chat: { agentType: "chat_webhook", surface: "chat" },
+  coding: { agentType: "mcp_agent", surface: "chat" },
+};
+
+/**
+ * What the builder hands to the workspace when the user accepts it.
+ *
+ * Every build is its own environment — `id` is minted per build by the
+ * caller. (A fixed id made every build the same environment and overwrote
+ * the seeded demo that shares it.) The seeded demo passes its own id.
+ */
+export const derivedEnvironment = (source, { id } = {}) => ({
+  id: id || "env-returns-line",
+  ...(REACH_BY_MODALITY[detectedStack(source).modality] || REACH_BY_MODALITY.voice),
   name: "Returns & refunds line",
-  surface: "voice",
   domain: "support",
   tagline: "Read from your agent",
   description:

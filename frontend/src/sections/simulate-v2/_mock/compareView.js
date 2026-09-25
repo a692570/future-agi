@@ -449,7 +449,16 @@ export const summaryRows = (comparison, evals) => {
   const metric = (run, get) => get(run);
 
   const lines = [
-    { id: "passRate", label: "Pass rate", format: (v) => `${Math.round(v)}%`, get: (r) => r.passRate, lowerIsBetter: false },
+    /* Over the scenarios every run shares and measured — the same questions
+       for every column — falling back to the whole-run rate only when there
+       are none in common. */
+    {
+      id: "passRate",
+      label: comparison.coverage?.common ? `Pass rate · ${comparison.coverage.common} shared scenarios` : "Pass rate",
+      format: (v) => (v == null ? "—" : `${Math.round(v)}%`),
+      get: (r) => (comparison.coverage?.common ? r.sharedPassRate : r.passRate),
+      lowerIsBetter: false,
+    },
     /* Scenarios that could not decide. A rate that improves while this climbs
        has not improved — it has got noisier. */
     { id: "flaky", label: "Flaky scenarios", format: (v) => `${v}`, get: (r) => r.flaky || 0, lowerIsBetter: true },

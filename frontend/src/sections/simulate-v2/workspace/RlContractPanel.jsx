@@ -5,9 +5,6 @@ import Iconify from "src/components/iconify";
 import { SectionCard } from "../components/primitives";
 import { episodeContract } from "../_mock/rlContract";
 import ActorsPanel from "./ActorsPanel";
-import CapabilityGraph from "./CapabilityGraph";
-import { TwinSandboxSection } from "./OverviewPanel";
-import WorldInternalsSection from "./WorldInternalsSection";
 
 /**
  * The environment contract — what this environment IS.
@@ -29,25 +26,10 @@ export default function RlContractPanel({ env, envState, patch, onGo }) {
       <Box sx={{ mb: 2 }}>
         <Typography sx={{ typography: "m2", fontWeight: 600 }}>Environment contract</Typography>
         <Typography sx={{ typography: "s2", color: "text.secondary", maxWidth: 780 }}>
-          What this environment is made of — the world runs execute against, the code
-          behind every tool call and grader, and how each run ends.
+          The rules of this environment — how each run ends, and who else acts in it. The data and tools
+          the agent talks to live on the World tab.
         </Typography>
       </Box>
-
-      {/* ── the world ─────────────────────────────────────────────────── */}
-      {envState?.twinBacking && (
-        <Box sx={{ mb: 2 }}>
-          <TwinSandboxSection env={env} envState={envState} />
-        </Box>
-      )}
-      {!envState?.twinBacking && (envState?.agent || (env.tools?.length || 0) > 0) && (
-        <Box sx={{ mb: 2 }}>
-          <CapabilityGraph env={env} envState={envState} onGo={onGo} />
-        </Box>
-      )}
-
-      {/* ── internals: DB schema + tool code + check code ─────────────── */}
-      <WorldInternalsSection env={env} envState={envState} patch={patch} />
 
       {/* ── run end conditions ────────────────────────────────────────── */}
       <SectionCard

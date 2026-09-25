@@ -290,6 +290,9 @@ function derivedRows(env, packId) {
         persona,
         expected: v.expected(tool),
         outcome: v.expected(tool),
+        /* The tool this scenario exists to exercise — recorded, not guessed
+           from the text, so a world that can't answer it is caught. */
+        requiredTools: [tool.name],
         conversationBranch: coreBranch(tool, v),
         branchCategory: coreCategory(tool, v),
         turns: 5 + ((i + vi) % 5) + v.turnsAdd,

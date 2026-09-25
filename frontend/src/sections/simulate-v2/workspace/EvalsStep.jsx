@@ -9,6 +9,10 @@ import { useAppliedEvals, EvalRow } from "./evals/appliedEvals";
 import AddEvalsDrawer from "./evals/AddEvalsDrawer";
 import TwinEvalEditor from "./evals/TwinEvalEditor";
 import EditEvalDrawer, { canEditEval } from "./evals/EditEvalDrawer";
+import { worldToolsFor } from "../_mock/toolFit";
+
+/* The catalogue eval behind the "tool call evaluation" switch. */
+const TOOL_CALL_EVAL_ID = "tool_correctness";
 
 /**
  * Evals.
@@ -33,6 +37,10 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
 
   const { appliedEvals, appliedIds, add, remove, update } = useAppliedEvals(envState, patch);
   const editing = appliedEvals.find((e) => e.id === editingId) || null;
+
+  const hasTools = worldToolsFor(env, envState).length > 0;
+  const toolCallEval = getEval(TOOL_CALL_EVAL_ID);
+  const toolCallEvalOn = appliedIds.has(TOOL_CALL_EVAL_ID);
 
   /*
     Suggested = the environment's preset MINUS anything already added.
@@ -142,8 +150,10 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
         )}
       </Stack>
 
-      {/* Tool-call evaluation — carried over from the legacy run setup. Tool
-          calls are read from the connected agent, so it needs one first. */}
+      {/* Tool-call evaluation — carried over from the legacy run setup. It is
+          the catalogue's tool-correctness eval, added to and removed from the
+          applied list like any other, so the switch and the list below can
+          never disagree. It needs tools for the world to answer, not an agent. */}
       <Stack
         direction="row" alignItems="center" spacing={2}
         sx={{ px: 2, py: 1.5, mb: 2, borderRadius: 1, border: "1px solid", borderColor: "divider" }}
@@ -151,17 +161,17 @@ export default function EvalsStep({ env, envState, patch, onGo, locked = false, 
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{ typography: "s1", fontWeight: 600 }}>Enable tool call evaluation</Typography>
           <Typography sx={{ typography: "s2", color: "text.secondary", mt: 0.25 }}>
-            {envState?.agent
+            {hasTools
               ? "Tool calling that happens during the calls will be evaluated — the right tool, with the right arguments, at the right time."
-              : "Connect your agent first — tool calls are read from it during the run."}
+              : "This environment has no tools yet — there are no tool calls to evaluate."}
           </Typography>
         </Box>
-        <Tooltip arrow title={locked ? "Fork this environment to edit." : !envState?.agent ? "Connect an agent to evaluate its tool calls." : ""}>
+        <Tooltip arrow title={locked ? "Fork this environment to edit." : !hasTools ? "Add tools to the world to evaluate tool calls." : ""}>
           <span>
             <Switch
-              checked={!!envState?.toolCallEval && !!envState?.agent}
-              disabled={locked || !envState?.agent}
-              onChange={(e) => patch({ toolCallEval: e.target.checked })}
+              checked={toolCallEvalOn}
+              disabled={locked || !hasTools || !toolCallEval}
+              onChange={(e) => (e.target.checked ? add([toolCallEval]) : remove(TOOL_CALL_EVAL_ID))}
               inputProps={{ "aria-label": "Enable tool call evaluation" }}
             />
           </span>

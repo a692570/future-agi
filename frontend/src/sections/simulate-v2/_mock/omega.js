@@ -18,7 +18,7 @@
  * a gaming detector must never do, or the next version learns to evade it.
  */
 
-import { domainTally } from "./failures";
+import { domainTally, flakySource } from "./failures";
 import { episodeReturn } from "./reward";
 import { checklistSteps } from "./callDetail";
 
@@ -296,7 +296,10 @@ export const ANALYZERS = [
 export const omegaReport = ({ env, summary, baseline }) => {
   const tasks = summary?.tasks || [];
   const measured = tasks.filter((t) => t.status !== "unmeasured");
-  const failing = measured.filter((t) => t.status === "failed" || t.status === "flaky");
+  /* A scenario that is flaky because the simulated caller drifted is the
+     simulator's, not the agent's — it is not something to fix in the agent. */
+  const failing = measured.filter((t) => t.status === "failed"
+    || (t.status === "flaky" && flakySource(t) !== "simulator"));
   const ctx = { env, tasks, measured, failing, baseline, summary };
 
   return ANALYZERS.map((a) => {

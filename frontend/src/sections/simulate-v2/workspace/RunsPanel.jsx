@@ -12,6 +12,8 @@ import { getSurface } from "../_mock/surfaces";
 import { agentVersionsWithRuns } from "../_mock/versions";
 import { SectionCard, EmptyState, StatusChip } from "../components/primitives";
 import RunsSummary from "../run/RunsSummary";
+import useRunFitCheck from "../run/useRunFitCheck";
+import { useEnvState } from "../store";
 
 /**
  * Pre-flight + run history.
@@ -22,6 +24,8 @@ import RunsSummary from "../run/RunsSummary";
  */
 export default function RunsPanel({ env, envState, onGo }) {
   const navigate = useNavigate();
+  const { patch } = useEnvState(env.id);
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
   const [scope, setScope] = useState("all");
   const surface = getSurface(env.surface);
   const agentType = getAgentType(envState.agent?.typeId);
@@ -30,10 +34,10 @@ export default function RunsPanel({ env, envState, onGo }) {
     ? envState.runs
     : envState.runs.filter((r) => r.agentVersion === scope);
 
-  const startRun = () => {
+  const startRun = () => checkRunFit(() => {
     const runId = protoRunId(env.id, Date.now().toString(36));
     navigate(paths.dashboard.simulate.simulationRun(env.id, runId));
-  };
+  });
 
   /*
     Once there is anything to compare, this step is the summary rather than a
@@ -45,6 +49,7 @@ export default function RunsPanel({ env, envState, onGo }) {
 
   return (
     <Box sx={{ p: 2 }}>
+      {runFitDialog}
       <Box sx={{ mb: 3 }}>
         <Typography sx={{ typography: "m2", fontWeight: 600 }}>Run simulation</Typography>
         <Typography sx={{ typography: "s1", color: "text.secondary" }}>

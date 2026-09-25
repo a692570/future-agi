@@ -12,6 +12,9 @@ import { paths } from "src/routes/paths";
 import { getEnvironment } from "../_mock/environments";
 import { neutralCheckboxSx } from "../components/primitives";
 import { protoRunId } from "../_mock/executionAdapter";
+import { versionNumber } from "../_mock/versions";
+import { toolFit } from "../_mock/toolFit";
+import useRunFitCheck from "./useRunFitCheck";
 import {
   buildComparison, distributionFor, changedCount, runSummaries, trialSummaries, chipIdentity,
 } from "../_mock/comparison";
@@ -124,6 +127,7 @@ export default function CompareRuns() {
   };
 
   const env = getEnvironment(envId) || state.myEnvironments.find((e) => e.id === envId);
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
   const runIds = useMemo(() => (params.get("runs") || "").split(",").filter(Boolean), [params]);
   const comparison = useMemo(
     () => (env ? buildComparison(env, envState, runIds) : { runs: [], rows: [], evals: [] }),
@@ -223,18 +227,56 @@ export default function CompareRuns() {
     );
   };
 
-  const rerunSelected = () => {
-    const only = selected.join(",");
-    navigate(
-      `${paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)))}?only=${only}`,
-    );
+  /*
+    Whether these runs took the same test — and if not, what differs.
+    Different environment versions: the world moved, not just the agent. An
+    older agent fits a newer world (it just never calls the tools it lacks),
+    so the fix is to re-run the older agent on the newer environment — pinned
+    in the URL, so the environment's own active version is left alone, and
+    with the same scenarios and trial count as the run it replaces.
+  */
+  const sameTest = (() => {
+    const envs = [...(comparison.coverage.envVersions || [])].sort((a, b) => versionNumber(a) - versionNumber(b));
+    const target = envs[envs.length - 1];
+    const behind = envs.length > 1
+      ? comparison.runs.find((r) => r.envVersion && r.envVersion !== target
+        && r.kind !== "trial"
+        && toolFit(env, envState, { agent: r.agentVersion, envVersion: target }).fits)
+      : null;
+    const notes = [];
+    if (envs.length > 1) {
+      notes.push(`These runs used environments ${envs.join(" and ")}, so part of the difference is the environment, not the agent.`);
+    }
+    if (!comparison.coverage.sameGraders) notes.push("They were graded by different evaluations.");
+    if (comparison.coverage.toolGapRuns?.length) {
+      notes.push(`${comparison.coverage.toolGapRuns.length === 1 ? "One run was" : "Some runs were"} run anyway on a world that can't answer every tool — those scenarios are not measured.`);
+    }
+    if (!notes.length) return null;
+    return { envs, target, run: behind || null, notes };
+  })();
+
+  const rerunOnSameTest = () => {
+    if (!sameTest?.run) return;
+    const q = new URLSearchParams({ agent: sameTest.run.agentVersion, env: sameTest.target });
+    if (sameTest.run.partial && sameTest.run.scenarioIds?.length) q.set("only", sameTest.run.scenarioIds.join(","));
+    q.set("trials", String(sameTest.run.repeats || 3));
+    navigate(`${paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)))}?${q.toString()}`);
   };
+
+  const rerunSelected = () => checkRunFit(() => {
+    const only = selected.join(",");
+    const trials = comparison.runs[comparison.runs.length - 1]?.repeats || 3;
+    navigate(
+      `${paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36)))}?only=${only}&trials=${trials}`,
+    );
+  });
   const bands = evalId ? distributionFor(comparison, evalId) : [];
   const peak = Math.max(1, ...bands.flatMap((b) => b.counts));
   const rowPad = ROW_HEIGHTS.find((h) => h.id === view.rowHeight)?.py ?? 2;
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
+      {runFitDialog}
       {/* ── header ──
           Two rows on purpose. Everything was on one line — title, subtitle,
           five chips, four controls and two icons — and a row that dense reads
@@ -253,7 +295,10 @@ export default function CompareRuns() {
                 four blockers it was a lie in the subtitle of the screen that
                 decides releases. */}
             <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-              {comparison.runs.length} agent versions · {comparison.coverage.shared} scenarios in every run
+              {(() => {
+                const n = new Set(comparison.runs.map((r) => r.agentVersion)).size;
+                return `${comparison.runs.length} runs · ${n} agent version${n === 1 ? "" : "s"}`;
+              })()} · {comparison.coverage.shared} scenarios in every run
               {comparison.coverage.partial > 0 && ` · ${comparison.coverage.partial} in only some`}
               {comparison.coverage.unmeasured > 0 && ` · ${comparison.coverage.unmeasured} not measured`}
               {sampleNote}
@@ -365,6 +410,30 @@ export default function CompareRuns() {
             onOptimize={optimizeSelected}
           />
         </Stack>
+
+        {sameTest && (
+          <Stack
+            direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "center" }} spacing={1.25}
+            sx={{ mx: 2, mb: 1.5, px: 1.5, py: 1.125, borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.neutral" }}
+          >
+            <Iconify icon="solar:scale-linear" width={17} sx={{ color: "text.subtitle", flexShrink: 0 }} />
+            <Typography sx={{ typography: "s3", color: "text.secondary", flex: 1, minWidth: 0 }}>
+              <Box component="span" sx={{ fontWeight: 700, color: "text.primary" }}>Not the same test.</Box>{" "}
+              {sameTest.notes.join(" ")}
+              {sameTest.run && ` Re-run agent ${sameTest.run.agentVersion} on environment ${sameTest.target} to compare on the same test.`}
+            </Typography>
+            {sameTest.run && (
+              <Button
+                size="small" variant="outlined"
+                onClick={rerunOnSameTest}
+                startIcon={<Iconify icon="solar:play-linear" width={14} />}
+                sx={{ flexShrink: 0, typography: "s3", fontWeight: 700, color: "text.primary", borderColor: "divider", "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" } }}
+              >
+                Re-run {sameTest.run.agentVersion} on env {sameTest.target}
+              </Button>
+            )}
+          </Stack>
+        )}
       </Box>
 
       <Menu

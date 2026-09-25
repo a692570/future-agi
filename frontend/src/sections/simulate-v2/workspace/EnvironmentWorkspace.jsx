@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { alpha } from "@mui/material/styles";
 import PropTypes from "prop-types";
@@ -21,7 +21,8 @@ import { setupGaps } from "../_mock/setupGaps";
 import { subscribeBuilderPrompt } from "../_mock/builderPromptBus";
 import { subscribeScenarioSelection, clearScenarioSelection, getScenarioSelection } from "../_mock/scenarioSelectionBus";
 import { subscribeBuilderMode } from "../_mock/builderModeBus";
-import { environmentVersions } from "../_mock/versions";
+import { currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
+import { withPinnedWorld, worldToolsFor } from "../_mock/toolFit";
 import { getAgentType } from "../_mock/agentTypes";
 import { SurfaceIcon, EmptyState, SectionCard } from "../components/primitives";
 import { ProvisioningPanel } from "../components/loading";
@@ -35,6 +36,8 @@ import VersionBar from "./VersionBar";
 import EnvVersionPin from "./EnvVersionPin";
 import BuildRecordPanel from "./BuildRecordPanel";
 import RlContractPanel from "./RlContractPanel";
+import useRunFitCheck from "../run/useRunFitCheck";
+import WorldPanel from "./WorldPanel";
 import SettingsPanel from "./SettingsPanel";
 
 /**
@@ -57,6 +60,7 @@ import SettingsPanel from "./SettingsPanel";
 */
 const TABS = [
   { id: "overview",  label: "Overview",          icon: "solar:widget-5-linear" },
+  { id: "world",     label: "World",             icon: "solar:globe-linear" },
   { id: "contract",  label: "Contract",          icon: "solar:document-text-linear" },
   { id: "scenarios", label: "Scenarios",         icon: "solar:layers-minimalistic-linear", badge: "scenarios" },
   { id: "evals",     label: "Evaluations",       icon: "solar:shield-check-linear", badge: "evals" },
@@ -139,7 +143,15 @@ export default function EnvironmentWorkspace() {
   const env =
     getEnvironment(envId) || state.myEnvironments.find((e) => e.id === envId);
 
-  const { envState, patch, addAgentVersion, canRun } = useEnvState(envId);
+  const { envState, patch, canRun } = useEnvState(envId);
+  /* Panels see the world of the pinned environment version. */
+  const worldEnv = useMemo(
+    () => withPinnedWorld(env, envState),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState.envVersions, envState.activeEnvVersion],
+  );
+  /* Every new run asks first when the agent calls a tool the world can't answer. */
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
 
   // Opening an environment goes straight to it — a boot sequence on every entry
   // is a delay the user did not ask for. The sequence is kept for "Reset state",
@@ -169,7 +181,9 @@ export default function EnvironmentWorkspace() {
      user clicks the top-of-page "Run simulation" button (no selection).
      Same PRD AC-10.7 dial as the SelectionBar's picker, but scoped to
      "run all". Run simulation starts straight away with this value. */
-  const [headerTrials, setHeaderTrials] = useState(1);
+  /* Three samples by default — the fewest where a scenario can be flaky
+     ("passed twice, failed once") rather than a coin flip read as a verdict. */
+  const [headerTrials, setHeaderTrials] = useState(3);
   /* Header overflow menu (Delete environment) and its confirm step. */
   const [actionsAnchor, setActionsAnchor] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -305,7 +319,7 @@ export default function EnvironmentWorkspace() {
      tacked on as `?only=` (matching the existing subset convention
      LiveRunView already reads) so the run only exercises that
      subset — otherwise the run covers every scenario in the env. */
-  const startRun = (scenarioIds, trials) => {
+  const launchRun = (scenarioIds, trials) => {
     const runId = protoRunId(envId, Date.now().toString(36));
     let url = paths.dashboard.simulate.simulationRun(envId, runId);
     const params = new URLSearchParams();
@@ -313,19 +327,19 @@ export default function EnvironmentWorkspace() {
       params.set("only", scenarioIds.join(","));
     }
     /*
-      PRD §10.2 AC-10.7 — k trials per scenario. Default 3 is
-      applied by LiveRunView when the param is absent, so we
-      only add it when the user has actually dialed it up or
-      down; keeps existing links unchanged.
+      PRD §10.2 AC-10.7 — k trials per scenario. Always stated on the
+      link, so a run is exactly what was asked for (LiveRunView falls
+      back to 3 only for links that carry none).
     */
     const k = Number(trials);
-    if (Number.isFinite(k) && k >= 1 && k !== 1) {
+    if (Number.isFinite(k) && k >= 1) {
       params.set("trials", String(Math.min(20, Math.floor(k))));
     }
     const qs = params.toString();
     if (qs) url += `?${qs}`;
     navigate(url);
   };
+  const startRun = (scenarioIds, trials) => checkRunFit(() => launchRun(scenarioIds, trials));
 
   // Unknown steps render Overview, and the rail highlights it, so the URL and
   // the highlighted item never disagree.
@@ -424,7 +438,6 @@ export default function EnvironmentWorkspace() {
       type: "patchEnvState",
       envId: forkedId,
       patch: {
-        scenarios: envState.scenarios || [],
         evals: envState.evals || [],
         toolCallEval: envState.toolCallEval,
         scenarioSource: envState.scenarioSource,
@@ -433,16 +446,22 @@ export default function EnvironmentWorkspace() {
         agentVersions: envState.agentVersions
           ? envState.agentVersions.map((v) => ({ ...v }))
           : undefined,
+        /* The fork starts from the world as it stands — including tools a
+           rebuild taught it — not from the first build's. */
         envVersions: [{
           id: `${forkedId}-v1`,
           label: "v1",
           createdAt: now,
-          note: `Forked from ${env.name}.`,
+          note: `Forked from ${env.name} at environment ${currentEnvVersion(env, envState).label}.`,
           scenarios: (envState.scenarios || []).length,
-          changed: ["fork"],
+          changed: [],
+          tools: worldToolsFor(env, envState),
+          builtFor: currentAgentVersion(envState).label,
         }],
-        envDerivedForAgent: "v1",
-        activeAgentVersion: "v1",
+        activeEnvVersion: "v1",
+        activeAgentVersion: currentAgentVersion(envState).label,
+        /* Scenarios a rebuild added are part of this world now. */
+        scenarios: (envState.scenarios || []).map((sc) => (sc.addedInEnv ? { ...sc, addedInEnv: "v1", provedAgainst: "v1" } : sc)),
         seededFromTemplate: false,
       },
     });
@@ -920,14 +939,7 @@ export default function EnvironmentWorkspace() {
 
       {/* ── body: rail + panel ── */}
       {/* A run is a pairing — this environment version × that agent version. */}
-      <VersionBar
-        env={env}
-        envState={envState}
-        scenarioCount={envState.scenarios.length}
-        onAddVersion={addAgentVersion}
-        patch={patch}
-        onRunAfterVersion={startRun}
-      />
+      <VersionBar env={env} envState={envState} />
 
       {/* ── body: builder console (left) + tabbed panels (right) —
             unified with the build/review screen ── */}
@@ -985,25 +997,28 @@ export default function EnvironmentWorkspace() {
           */}
           <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto" }}>
             {panel === "agent" ? (
-              <AgentsPanel env={env} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
+              <AgentsPanel env={worldEnv} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
             ) : panel === "scenarios" ? (
-              <ScenariosStep env={env} envState={envState} patch={patch} onGo={go} onBuilderPrompt={sendChat} onStartRun={startRun} locked={isSeededTemplate} onFork={forkEnvironment} />
+              <ScenariosStep env={worldEnv} envState={envState} patch={patch} onGo={go} onBuilderPrompt={sendChat} onStartRun={startRun} locked={isSeededTemplate} onFork={forkEnvironment} />
             ) : panel === "evals" ? (
-              <EvalsStep env={env} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
+              <EvalsStep env={worldEnv} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
             ) : panel === "runs" ? (
-              <RunsPanel env={env} envState={envState} onGo={go} />
+              <RunsPanel env={worldEnv} envState={envState} onGo={go} />
+            ) : panel === "world" ? (
+              <WorldPanel env={worldEnv} envState={envState} patch={patch} onGo={go} />
             ) : panel === "contract" ? (
-              <RlContractPanel env={env} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
+              <RlContractPanel env={worldEnv} envState={envState} patch={patch} onGo={go} locked={isSeededTemplate} onFork={forkEnvironment} />
             ) : panel === "settings" ? (
-              <SettingsPanel env={env} envState={envState} patch={patch} locked={isSeededTemplate} onFork={forkEnvironment} onDelete={isSeededTemplate ? undefined : () => setConfirmDelete(env)} />
+              <SettingsPanel env={worldEnv} envState={envState} patch={patch} locked={isSeededTemplate} onFork={forkEnvironment} onDelete={isSeededTemplate ? undefined : () => setConfirmDelete(env)} />
             ) : panel === "build" ? (
-              <BuildRecordPanel env={env} envState={envState} patch={patch} />
+              <BuildRecordPanel env={worldEnv} envState={envState} patch={patch} />
             ) : (
-              <OverviewPanel env={env} envState={envState} patch={patch} onGo={go} agentConnected={!!envState.agent} locked={isSeededTemplate} onFork={forkEnvironment} />
+              <OverviewPanel env={worldEnv} envState={envState} patch={patch} onGo={go} agentConnected={!!envState.agent} locked={isSeededTemplate} onFork={forkEnvironment} />
             )}
           </Box>
         </Box>
       </Box>
+      {runFitDialog}
     </Box>
   );
 }

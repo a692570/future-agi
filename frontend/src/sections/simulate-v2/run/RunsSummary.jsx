@@ -108,9 +108,12 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     reads the same ordinal you can find in the list.
   */
   const mergedRaw = useMemo(() => {
+    /* A run still going has no finish time yet — it sorts by when it
+       started, not as the oldest run there is. */
+    const when = (r) => new Date(r.finishedAt || r.startedAt || Date.now()).getTime();
     const combined = [...summaries, ...trials]
       .filter((r) => !r.synthetic)
-      .sort((a, b) => new Date(a.finishedAt || 0) - new Date(b.finishedAt || 0));
+      .sort((a, b) => when(a) - when(b));
     const stamped = combined.map((r, i) => {
       const ord = i + 1;
       return {
@@ -858,6 +861,16 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
                             {runTimeLabel(r)}
                           </Typography>
+                          {r.toolGap?.length > 0 && (
+                            <Tooltip
+                              arrow
+                              title={`Run anyway on environment ${r.envVersion}, which can't answer ${r.toolGap.join(", ")}. Scenarios that called ${r.toolGap.length === 1 ? "it" : "them"} got no answer and are not measured.`}
+                            >
+                              <Box sx={{ display: "inline-flex", flexShrink: 0, color: "text.secondary" }}>
+                                <Iconify icon="solar:plug-circle-linear" width={15} />
+                              </Box>
+                            </Tooltip>
+                          )}
                           {/* SI provenance chip — this trial belongs to the
                               self-improvement search launched from Run N.
                               Clicking navigates to that parent run so the
@@ -1000,6 +1013,16 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
                             {runTimeLabel(r)}
                           </Typography>
+                          {r.toolGap?.length > 0 && (
+                            <Tooltip
+                              arrow
+                              title={`Run anyway on environment ${r.envVersion}, which can't answer ${r.toolGap.join(", ")}. Scenarios that called ${r.toolGap.length === 1 ? "it" : "them"} got no answer and are not measured.`}
+                            >
+                              <Box sx={{ display: "inline-flex", flexShrink: 0, color: "text.secondary" }}>
+                                <Iconify icon="solar:plug-circle-linear" width={15} />
+                              </Box>
+                            </Tooltip>
+                          )}
                           {/*
                             "X of N", "N flaky" and the measured fraction
                             used to trail here. All three read as run

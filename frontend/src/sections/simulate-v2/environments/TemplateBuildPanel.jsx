@@ -84,6 +84,11 @@ export default function TemplateBuildPanel({ template, showName = false }) {
           note: "First build from the template.",
           scenarios: scenarioCount,
           changed: ["contract", "seed"],
+          /* The template's world answers the template's tools; its baseline
+             agent is v1 and calls exactly those. Your own agent plugs in as a
+             later version and is fit-checked against this world. */
+          tools: (env.tools || []).map((tool) => ({ ...tool })),
+          builtFor: "v1",
         }],
         agent: {
           typeId: t?.id,
@@ -94,11 +99,8 @@ export default function TemplateBuildPanel({ template, showName = false }) {
           connectedAt: now,
         },
         agentVersions: [
-          { id: "agent-v1", label: "v1", note: "Shipped with the template.", reach: "seed", createdAt: now },
+          { id: "agent-v1", label: "v1", note: "Shipped with the template.", reach: "seed", createdAt: now, tools: (env.tools || []).map((tool) => ({ ...tool })) },
         ],
-        /* The env v1 was derived against agent v1 — so the "agent moved ahead"
-           refresh banner only appears once the user adds a newer agent version. */
-        envDerivedForAgent: "v1",
         scenarios: seededScenarios.length ? seededScenarios : scenarios,
         scenarioSource: env.twinBacking ? "twin_starter" : "templates",
         /* Seed the added-evals list with the template's preset (same set

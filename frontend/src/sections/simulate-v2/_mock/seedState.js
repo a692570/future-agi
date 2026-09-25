@@ -14,6 +14,7 @@
 import { getEnvironment } from "./environments";
 import { getRows } from "./scenarios";
 import { derivedEnvironment } from "./builder";
+import { seededEnvHistory } from "./versions";
 
 const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
 
@@ -97,6 +98,9 @@ export function seededState() {
           connectedAt: daysAgo(2),
         },
         scenarios: builtScenarios,
+        /* A real history for the demo — stated here, not invented for
+           every environment that has none. */
+        envVersions: seededEnvHistory(built, builtScenarios.length),
         scenarioSource: "agent",
         /*
           Every seeded env has at least Task success + Policy adherence
@@ -138,6 +142,9 @@ export function seededState() {
           connectedAt: daysAgo(4),
         },
         scenarios: travelScenarios,
+        /* A real history for the demo — stated here, not invented for
+           every environment that has none. */
+        envVersions: seededEnvHistory(travel, travelScenarios.length),
         scenarioSource: "templates",
         /*
           Every seeded env has at least Task success + Policy adherence
@@ -167,6 +174,9 @@ export function seededState() {
           connectedAt: daysAgo(5),
         },
         scenarios: browserScenarios,
+        /* A real history for the demo — stated here, not invented for
+           every environment that has none. */
+        envVersions: seededEnvHistory(browser, browserScenarios.length),
         scenarioSource: "templates",
         /*
           Every seeded env has at least Task success + Policy adherence
@@ -187,6 +197,9 @@ export function seededState() {
       [banking.id]: {
         agent: null,
         scenarios: bankingScenarios,
+        /* A real history for the demo — stated here, not invented for
+           every environment that has none. */
+        envVersions: seededEnvHistory(banking, bankingScenarios.length),
         scenarioSource: "templates",
         /*
           Every seeded env has at least Task success + Policy adherence
@@ -215,6 +228,9 @@ export function seededState() {
           connectedAt: daysAgo(0),
         },
         scenarios: voiceScenarios,
+        /* A real history for the demo — stated here, not invented for
+           every environment that has none. */
+        envVersions: seededEnvHistory(voice, voiceScenarios.length),
         scenarioSource: "templates",
         evals: ["task_success", "policy_adherence"],
         agentVersions: [agentVersion(1, 0, "First version connected today.")],

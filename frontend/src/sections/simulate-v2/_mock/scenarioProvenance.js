@@ -79,6 +79,16 @@ export const SOURCES = {
     actor: CURRENT_USER,
     formKind: "user",
   },
+  /* Written by the environment itself when a rebuild taught the world a
+     tool a new agent version calls. */
+  rebuild: {
+    id: "rebuild",
+    label: "Added by a rebuild",
+    short: "Rebuild",
+    icon: "solar:refresh-linear",
+    actor: SYSTEM_ACTOR,
+    formKind: "auto",
+  },
   production: {
     id: "production",
     label: "From production trace",
@@ -177,6 +187,8 @@ export function groupByBatch(scenarios) {
       source: s.source,
       addedBy: s.addedBy,
       addedAt: s.addedAt,
+      /* Why the batch exists, when the batch knows (a rebuild does). */
+      note: s.batchNote || null,
       scenarios: [],
     };
     cur.scenarios.push(s);

@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Button, IconButton, TextField, MenuItem, Select, FormControl, InputLabel,
@@ -9,6 +9,7 @@ import SideDrawer from "../../components/SideDrawer";
 import { AGENT_TYPES, agentTypesForSurface, getAgentType } from "../../_mock/agentTypes";
 import { SOURCE_KINDS, REF_KINDS } from "../../_mock/builder";
 import DynamicField from "../connect/DynamicField";
+import { readToolsFromSource } from "../../_mock/toolFit";
 
 /**
  * Add another agent — matches the primary connect flow's five source kinds.
@@ -26,7 +27,7 @@ import DynamicField from "../connect/DynamicField";
  * the file itself. All five paths end at the same output: an agent
  * record that gets attached to `envState.additionalAgents`.
  */
-export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, newVersion }) {
+export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, newVersion, baseTools, baseLabel }) {
   /*
     The drawer serves two flows: adding a fresh implementation, and
     editing the existing source's connection. The `editing` prop
@@ -54,6 +55,10 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
   const [mcpUrl, setMcpUrl] = useState(() => editing?.values?.mcpUrl || "");
   const [file, setFile] = useState(null);
   const [note, setNote] = useState(() => (editing?.note && editing.note !== "Environment source" ? editing.note : ""));
+  /* Tools belong to the version, and are read from its source — never typed.
+     null until there is a source to read, "reading" while we read it, then
+     the list that was found. */
+  const [readTools, setReadTools] = useState(null);
 
   /* Hosted-platform state — the schema-driven type + values live here. */
   const surfaceTypes = useMemo(() => {
@@ -76,13 +81,34 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
   };
   const platformReady = type && (type.fields || []).every((f) => !f.required || !isVisible(f) || values[f.key]);
 
-  /* Per-source-kind readiness check for the primary CTA. */
-  const canSave = ({
+  /* Per-source-kind readiness: is there enough to reach this version? */
+  const sourceReady = !!({
     repo: location.trim() && refValue.trim(),
     platform: platformReady,
     mcp: mcpUrl.trim(),
     upload: !!file,
   })[sourceKind];
+
+  /* What identifies the source being read — a change re-reads it. */
+  const sourceKey = ({
+    repo: `${location.trim()}@${refKind}:${refValue.trim()}`,
+    platform: `${typeId}:${JSON.stringify(values)}`,
+    mcp: mcpUrl.trim(),
+    upload: file?.name || "",
+  })[sourceKind];
+  const baseKey = (baseTools || []).map((t) => t.name).join(",");
+
+  useEffect(() => {
+    if (!isNewVersion || !open) return undefined;
+    if (!sourceReady) { setReadTools(null); return undefined; }
+    /* Restarting on every change doubles as a debounce while typing. */
+    setReadTools("reading");
+    const t = setTimeout(() => setReadTools(readToolsFromSource(baseTools || [], `${sourceKind}:${sourceKey}`)), 1200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNewVersion, open, sourceReady, sourceKind, sourceKey, baseKey]);
+
+  const canSave = sourceReady && (!isNewVersion || Array.isArray(readTools));
 
   const reset = () => {
     setSourceKind("repo");
@@ -91,6 +117,7 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
     setTypeId(surfaceTypes[0]?.id || AGENT_TYPES[0]?.id);
     setValues({});
     setShowAll(false);
+    setReadTools(null);
   };
 
   const save = () => {
@@ -116,6 +143,7 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
       ref: sourceKind === "repo" ? { kind: refKind, value: refValue } : null,
       connectedAt: new Date().toISOString(),
       note: note.trim() || via,
+      ...(isNewVersion && Array.isArray(readTools) && { tools: readTools }),
     });
     reset();
   };
@@ -137,7 +165,7 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
             </Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
               {isNewVersion
-                ? "Point the new version at its endpoint or source. The previous version stays in the history — you can switch back any time. The environment's contract, scenarios and evaluations re-derive against the version you make active."
+                ? "Point the new version at its endpoint or source. The previous version stays in the history — you can switch back any time. It plugs into this same environment; we read its tools and tell you whether the world can answer them."
                 : isEditing
                   ? "Update where this environment reads its agent from."
                   : "Every source is read, never typed. Point us at the endpoint or the repo."}
@@ -236,6 +264,14 @@ export default function AddAgentDrawer({ open, onClose, env, onAdd, editing, new
             <UploadField file={file} setFile={setFile} />
           )}
 
+          {isNewVersion && (
+            <VersionToolsField
+              state={readTools}
+              previous={baseTools || []}
+              previousLabel={baseLabel || "the previous version"}
+            />
+          )}
+
           {/* ── note ── */}
           <Box>
             <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary", textTransform: "uppercase", letterSpacing: 0.6, mb: 0.75 }}>
@@ -297,6 +333,98 @@ AddAgentDrawer.propTypes = {
   onAdd: PropTypes.func,
   newVersion: PropTypes.bool,
   editing: PropTypes.object,
+  baseTools: PropTypes.array,
+  baseLabel: PropTypes.string,
+};
+
+/* ── the version's tools ──────────────────────────────────────────────────── */
+
+function VersionToolsField({ state, previous, previousLabel }) {
+  const heading = (
+    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.primary", textTransform: "uppercase", letterSpacing: 0.6, mb: 0.75 }}>
+      Tools this version calls
+    </Typography>
+  );
+
+  if (!Array.isArray(state)) {
+    const reading = state === "reading";
+    return (
+      <Box>
+        {heading}
+        <Stack
+          direction="row" alignItems="center" spacing={1.25}
+          sx={{
+            px: 1.5, py: 1.5, borderRadius: 1, border: "1px dashed", borderColor: "divider",
+            color: "text.subtitle",
+          }}
+        >
+          {reading ? (
+            <Box
+              sx={{
+                width: 12, height: 12, borderRadius: "50%", flexShrink: 0,
+                border: "1.5px solid", borderColor: "text.secondary", borderTopColor: "transparent",
+                animation: "tools-spin 0.7s linear infinite",
+                "@keyframes tools-spin": { to: { transform: "rotate(360deg)" } },
+              }}
+            />
+          ) : (
+            <Iconify icon="solar:code-scan-linear" width={16} sx={{ flexShrink: 0 }} />
+          )}
+          <Typography sx={{ typography: "s3" }}>
+            {reading
+              ? "Reading the tools from this version's source…"
+              : "Point us at the new version above and we'll read the tools it calls from its source."}
+          </Typography>
+        </Stack>
+      </Box>
+    );
+  }
+
+  const before = new Set(previous.map((t) => t.name));
+  const added = state.filter((t) => !before.has(t.name));
+  const kept = state.filter((t) => before.has(t.name));
+
+  return (
+    <Box>
+      {heading}
+      <Typography sx={{ typography: "s3", color: "text.subtitle", mb: 1 }}>
+        {added.length
+          ? `Read ${state.length} tools from the source — ${added.length} new since ${previousLabel}. The environment will need to learn ${added.length === 1 ? "it" : "them"} before this version can be tested.`
+          : `Read ${state.length} tools from the source — the same tools as ${previousLabel}.`}
+      </Typography>
+      <Stack
+        divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}
+        sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, maxHeight: 320, overflowY: "auto" }}
+      >
+        {[...added, ...kept].map((t) => (
+          <Stack key={t.name} direction="row" alignItems="center" spacing={1.25} sx={{ px: 1.25, py: 0.875 }}>
+            <Typography sx={{ typography: "s2", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600, flexShrink: 0 }}>
+              {t.name}
+            </Typography>
+            <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flex: 1, minWidth: 0 }}>
+              {t.desc}
+            </Typography>
+            {!before.has(t.name) && (
+              <Box
+                sx={{
+                  px: 0.625, height: 18, display: "inline-flex", alignItems: "center", borderRadius: 0.5, flexShrink: 0,
+                  border: "1px solid", borderColor: "divider", typography: "s3", fontWeight: 700, color: "text.secondary",
+                }}
+              >
+                New
+              </Box>
+            )}
+          </Stack>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
+VersionToolsField.propTypes = {
+  state: PropTypes.oneOfType([PropTypes.string, PropTypes.array]),
+  previous: PropTypes.array.isRequired,
+  previousLabel: PropTypes.string,
 };
 
 /**

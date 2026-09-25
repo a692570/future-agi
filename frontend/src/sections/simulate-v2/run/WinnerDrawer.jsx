@@ -7,7 +7,7 @@ import {
 import Iconify from "src/components/iconify";
 import SideDrawer from "../components/SideDrawer";
 import {
-  allMetrics, WEIGHT_PRESETS, presetWeights, defaultWeights, rankRuns, winningMargins, releaseGate,
+  allMetrics, WEIGHT_PRESETS, presetWeights, defaultWeights, rankRuns, winningMargins, releaseGate, comparableRuns,
 } from "../_mock/winner";
 
 /**
@@ -29,9 +29,11 @@ export default function WinnerDrawer({
   const [weights, setWeights] = useState(() => initial || defaultWeights(metrics));
   const [preset, setPreset] = useState(initial ? null : "balanced");
 
+  /* Only runs that took the same test are in the race. */
+  const field = useMemo(() => comparableRuns(summaries), [summaries]);
   const ranked = useMemo(
-    () => rankRuns(summaries, metrics, weights),
-    [summaries, metrics, weights],
+    () => rankRuns(field.runs, metrics, weights),
+    [field, metrics, weights],
   );
   const winner = ranked[0];
   const margins = useMemo(() => winningMargins(ranked), [ranked]);
@@ -74,6 +76,12 @@ export default function WinnerDrawer({
             <Typography sx={{ typography: "s2", color: "text.secondary" }}>
               Set how much each metric matters. The runs are ranked on these weights, so this is
               where you say what a better agent means here.
+            </Typography>
+            <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.75 }}>
+              Ranking {field.runs.length} run{field.runs.length === 1 ? "" : "s"} that took the same test
+              {field.envVersion ? ` — environment ${field.envVersion}` : ""}, every scenario
+              {field.repeats ? `, ${field.repeats} trial${field.repeats === 1 ? "" : "s"} each` : ""}.
+              {field.excluded > 0 && ` ${field.excluded} left out: a different environment, a partial re-run, a different trial count, or tools the world couldn't answer.`}
             </Typography>
           </Box>
           <IconButton size="small" onClick={onClose}>

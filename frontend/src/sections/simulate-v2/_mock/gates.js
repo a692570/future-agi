@@ -48,6 +48,9 @@ export const rejectsFor = (env) => {
   if (!env) return [];
   const tables = env.seed?.tables || [];
   const rules = env.rules || [];
+  /* The tools the world answers — `env.tools` is what it was built to answer
+     (toolFit's baseTools). Scenarios belong to the environment, so a draft is
+     judged against its world, never against whichever agent is plugged in. */
   const tools = env.tools || [];
 
   /* Gate 1 — the world cannot stage what the draft presumes. */
@@ -74,8 +77,8 @@ export const rejectsFor = (env) => {
     solvable.push({
       id: `${env.id}-rej-solvable-tool`,
       gate: "solution",
-      title: "Needs a tool this agent does not have",
-      reason: `The draft's solution reaches for a capability that is not in the contract. The agent has ${tools.length} tools — ${tools.map((t) => t.name).join(", ")} — and none of them do this, so the reference run never finished.`,
+      title: "Needs a tool this world can't answer",
+      reason: `The draft's solution reaches for a capability that is not in the contract. The world answers ${tools.length} tools — ${tools.map((t) => t.name).join(", ")} — and none of them do this, so the reference run never finished.`,
     });
   }
 

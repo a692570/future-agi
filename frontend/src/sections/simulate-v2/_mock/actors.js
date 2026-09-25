@@ -159,6 +159,13 @@ export const castFor = (env) => {
   return ACTOR_LIBRARY.filter((a) => a.modalities.includes(modality)).slice(0, 3).map((a) => a.id);
 };
 
+/**
+ * The environment's actual cast: what the author set, or the default cast
+ * until they have touched it. Every count and list of actors reads this, so
+ * the tab badge, the Actors panel and the contract all agree.
+ */
+export const actorsOf = (env, envState) => envState?.actors || castFor(env);
+
 export const getActor = (id) => ACTOR_LIBRARY.find((a) => a.id === id);
 export const getPressure = (id) => PRESSURE_KINDS.find((p) => p.id === id) || PRESSURE_KINDS[0];
 export const getEntry = (id) => ENTRY_KINDS.find((e) => e.id === id) || ENTRY_KINDS[0];

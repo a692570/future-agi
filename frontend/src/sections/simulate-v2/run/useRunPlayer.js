@@ -13,10 +13,12 @@ import { buildRun } from "../_mock/runStream";
  * scheduled timers, so a pause control would have to unwind and reschedule all
  * of them — a half-working pause is worse than none.
  */
-export default function useRunPlayer({ seed, scenarios, stage, evals, tools = [], concurrency = 4, repeats = 3, phrasing = 0 }) {
+export default function useRunPlayer({
+  seed, scenarios, stage, evals, tools = [], agentTools = null, failRate, concurrency = 4, repeats = 3, phrasing = 0,
+}) {
   const run = useMemo(
-    () => buildRun({ seed, scenarios, stage, evals, tools, concurrency, repeats, phrasing }),
-    [seed, scenarios, stage, evals, tools, concurrency, repeats, phrasing],
+    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing }),
+    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing],
   );
 
   const [phase, setPhase] = useState("booting"); // booting | running | done

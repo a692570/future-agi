@@ -8,10 +8,13 @@ import DerivingAnimation from "./DerivingAnimation";
 import PipelineChecks from "./PipelineChecks";
 import { pipelineStatus } from "../_mock/buildPipeline";
 import { setupGaps } from "../_mock/setupGaps";
+import { actorsOf } from "../_mock/actors";
 
 import OverviewPanel from "../workspace/OverviewPanel";
 import AgentsPanel from "../workspace/AgentsPanel";
 import RlContractPanel from "../workspace/RlContractPanel";
+import WorldPanel from "../workspace/WorldPanel";
+import { withPinnedWorld } from "../_mock/toolFit";
 import ScenariosStep from "../workspace/ScenariosStep";
 import PersonasPanel from "../workspace/PersonasPanel";
 import ActorsPanel from "../workspace/ActorsPanel";
@@ -52,6 +55,7 @@ import SettingsPanel from "../workspace/SettingsPanel";
 */
 const TABS = [
   { id: "overview",  label: "Overview",         needs: null },
+  { id: "world",     label: "World",            needs: "understand" },
   { id: "contract",  label: "Contract",         needs: "understand" },
   { id: "scenarios", label: "Scenarios",        needs: "scenarios", badge: "scenarios" },
   { id: "evals",     label: "Evaluations",      needs: null,        badge: "evals" },
@@ -144,10 +148,12 @@ export default function DerivedPanels({
     setTouched(true);
   };
 
+  /* Panels see the world of the pinned environment version. */
+  const worldEnv = useMemo(() => withPinnedWorld(env, envState), [env, envState]);
   const rendered = useMemo(() => renderPanel(current.id, {
-    env, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun,
+    env: worldEnv, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [current.id, env, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun]);
+  }), [current.id, worldEnv, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun]);
 
   if (!env) return null;
 
@@ -193,7 +199,7 @@ export default function DerivedPanels({
                  mid-build (scenarios are being generated *right now*)
                  so surfacing them reads as if the env is done. Badges
                  come back once running settles to false. */
-              const count = (primed && !running) ? badgeCountFor(t.badge, envState) : null;
+              const count = (primed && !running) ? badgeCountFor(t.badge, env, envState) : null;
               const gapItems = gapsByTab[t.id];
               const tabLabel = (
                 <Stack direction="row" alignItems="center" spacing={0.75}>
@@ -315,7 +321,7 @@ function isEditable(id) {
   return ["scenarios", "personas", "actors", "evals", "agent"].includes(id);
 }
 
-function badgeCountFor(kind, envState) {
+function badgeCountFor(kind, env, envState) {
   if (!envState) return null;
   if (kind === "scenarios") return envState.scenarios?.length ?? 0;
   if (kind === "personas") {
@@ -327,7 +333,7 @@ function badgeCountFor(kind, envState) {
     });
     return seen.size;
   }
-  if (kind === "actors") return envState.actors?.length ?? 0;
+  if (kind === "actors") return actorsOf(env, envState).length;
   if (kind === "evals") return envState.evals?.length ?? 0;
   return null;
 }
@@ -336,6 +342,7 @@ function renderPanel(id, ctx) {
   const { env, envState, patch, source, onBuilderTurn, onGo, onBuilderPrompt, onStartRun } = ctx;
   switch (id) {
     case "agent":     return <AgentsPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderTurn={onBuilderTurn} />;
+    case "world":     return <WorldPanel env={env} envState={envState} patch={patch} onGo={onGo} />;
     case "contract":  return <RlContractPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode />;
     case "scenarios": return <ScenariosStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderPrompt={onBuilderPrompt} onStartRun={onStartRun} />;
     case "evals":     return <EvalsStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode />;

@@ -16,7 +16,7 @@
  * address the same task cannot both count it.
  */
 
-import { isMeasured } from "./failures";
+import { flakySource, isMeasured } from "./failures";
 
 const readable = (name = "") => name.replace(/_/g, " ");
 
@@ -232,7 +232,9 @@ export const addressedCount = (included = []) =>
 
 /** The tasks a run can still be optimised against. */
 export const optimisable = (tasks = []) =>
-  tasks.filter((t) => isMeasured(t) && (t.status === "failed" || t.status === "flaky"));
+  tasks.filter((t) => isMeasured(t) && (t.status === "failed"
+    /* Simulator-drift flakiness is not the agent's to optimise away. */
+    || (t.status === "flaky" && flakySource(t) !== "simulator")));
 
 /**
  * Fixes to the measurement, not the agent.

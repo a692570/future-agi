@@ -11,6 +11,7 @@
  * ranking is arithmetic, and both are kept with the result — a winner nobody
  * can see the reasoning behind is just a badge.
  */
+import { versionNumber } from "./versions";
 
 /** Which way is better for each metric — half of them are lower-is-better. */
 export const SYSTEM_METRICS = [
@@ -101,6 +102,23 @@ export const defaultWeights = (metrics) =>
  * A metric every run ties on contributes nothing either way — normalising it
  * to zero would silently punish everyone.
  */
+/**
+ * The runs a winner can be picked from: the ones that took the same test.
+ * Same environment version (the newest any of them used), the full scenario
+ * set, no tools the world couldn't answer, and the same number of trials —
+ * otherwise "best" is partly "had an easier exam".
+ */
+export const comparableRuns = (summaries = []) => {
+  const envs = [...new Set(summaries.map((r) => r.envVersion).filter(Boolean))];
+  const envVersion = envs.sort((a, b) => versionNumber(b) - versionNumber(a))[0] || null;
+  const onEnv = summaries.filter((r) => (!envVersion || r.envVersion === envVersion)
+    && !r.partial && !(r.toolGap || []).length);
+  const counts = onEnv.reduce((m, r) => m.set(r.repeats || 1, (m.get(r.repeats || 1) || 0) + 1), new Map());
+  const repeats = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0] ?? null;
+  const runs = onEnv.filter((r) => (r.repeats || 1) === repeats);
+  return { runs, envVersion, repeats, excluded: summaries.length - runs.length };
+};
+
 export const rankRuns = (summaries, metrics, weights) => {
   if (!summaries.length) return [];
 
@@ -217,10 +235,14 @@ export const releaseGate = (run, { baseline, scenarioCount, budgets } = {}) => {
 
   /* A blocker that passed on the baseline and does not now is the single most
      expensive thing this product can fail to say out loud. */
-  const regressed = baseline && baseline.id !== run.id
+  /* Only against a baseline taken on the same world, and only for scenarios
+     this run actually measured — "we could not measure it this time" is not a
+     regression; the measured check below already covers it. */
+  const sameWorld = !baseline?.envVersion || !run.envVersion || baseline.envVersion === run.envVersion;
+  const regressed = baseline && baseline.id !== run.id && sameWorld
     ? blockers.filter((t) => {
       const before = baseline.tasks?.find((b) => b.id === t.id);
-      return before?.status === "passed" && t.status !== "passed";
+      return before?.status === "passed" && (t.status === "failed" || t.status === "flaky");
     })
     : [];
 

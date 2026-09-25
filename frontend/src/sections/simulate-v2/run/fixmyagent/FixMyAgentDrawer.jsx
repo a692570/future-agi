@@ -176,11 +176,19 @@ export default function FixMyAgentDrawer({
     The version is minted here rather than at hand-off because this is the first
     moment the agent might actually be different.
   */
+  /* The agent version the diagnosed run tested — what these changes are
+     made on top of. (A trial id resolves to its source run.) */
+  const runAgentVersion = (() => {
+    const trialM = /^(OPT-\d+)-t(\d+)$/.exec(runId || "");
+    const sourceId = trialM ? records.find((o) => o.id === trialM[1])?.fromRunId : runId;
+    return (envState?.runs || []).find((r) => r.id === sourceId)?.agentVersion || null;
+  })();
+
   const rerun = (changes, expected) => {
     const note = changes.length === 1
       ? changes[0].title
       : `${changes.length} changes: ${[...new Set(changes.map((c) => c.kind.toLowerCase()))].join(", ")}`;
-    const version = nextAgentVersion(envState, { note });
+    const version = nextAgentVersion(envState, { note, basedOnVersion: runAgentVersion });
     addAgentVersion?.(version);
     patch({
       omegaExpectation: {
@@ -197,50 +205,6 @@ export default function FixMyAgentDrawer({
     const subset = ids.length < (envState?.scenarios?.length || 0);
     onClose();
     navigate(subset ? `${url}?only=${ids.join(",")}` : url);
-  };
-
-  /*
-    Create the next agent version from the accepted changes — the new
-    primary path. Same version-minting the hand-off used to do at re-run
-    time, but done here explicitly: the accepted diffs travel on the
-    version, tied to the run that produced them. The drawer stays open so
-    the NewAgentVersion component can show its success state; the user
-    then closes and clicks "Run again" on the parent, which will target
-    the new version because it is now the current one.
-  */
-  /*
-    After a new agent version has been minted, "Run in simulation" starts
-    a fresh run against the same environment. The store already treats the
-    newest version as current, so the run lands as a new row in the
-    simulation runs table tagged with the new label — no per-run version
-    override needed. Compare v1 v v2 stays on the existing compare flow.
-  */
-  const runNewVersion = () => {
-    onClose();
-    navigate(paths.dashboard.simulate.simulationRun(env.id, protoRunId(env.id, Date.now().toString(36))));
-  };
-
-  const createAgentVersion = (changes, expected, noteOverride) => {
-    const note = noteOverride
-      || (changes.length === 1
-        ? changes[0].title
-        : `${changes.length} changes: ${[...new Set(changes.map((c) => c.kind.toLowerCase()))].join(", ")}`);
-    const version = nextAgentVersion(envState, {
-      note,
-      applied: changes,
-      fromRunId: runId || null,
-    });
-    addAgentVersion?.(version);
-    patch({
-      omegaExpectation: {
-        version: version.label,
-        fromRun: runId || null,
-        projected: expected,
-        scenarios: tasks.length,
-        addresses: [...new Set(changes.flatMap((c) => c.addresses))],
-        at: new Date().toISOString(),
-      },
-    });
   };
 
   const close = () => {
@@ -281,8 +245,6 @@ export default function FixMyAgentDrawer({
             runId={runId}
             onOptimize={startWithDefaults}
             onHandOff={rerun}
-            onCreateAgentVersion={createAgentVersion}
-            onRunNewVersion={runNewVersion}
             env={env}
             envState={envState}
             patch={patch}

@@ -117,7 +117,9 @@ export default function TemplateReviewLayout({
     world, we call this to stream every stage in sequence.
   */
   const startDerivation = () => {
-    const source = { kind: "template", value: env.name, templateId: env.id };
+    /* The world's real tools travel with the source, so the narration counts
+       what this environment has — not the demo agent's twelve. */
+    const source = { kind: "template", value: env.name, templateId: env.id, tools: env.tools || [] };
     const play = (stageId, delay = 0) => {
       const stage = builderRun(stageId, source);
       const turnId = `t-${stageId}-${Date.now()}`;
@@ -220,7 +222,7 @@ export default function TemplateReviewLayout({
       }],
     }]);
     const play = (stageId, delay = 0) => {
-      const stage = builderRun(stageId, { kind: "template", value: env.name, templateId: env.id });
+      const stage = builderRun(stageId, { kind: "template", value: env.name, templateId: env.id, tools: env.tools || [] });
       const turnId = `t-${stageId}-${Date.now()}`;
       timers.current.push(setTimeout(() => {
         setTurns((prev) => [...prev, { id: turnId, role: "builder", title: stage.title, steps: [] }]);

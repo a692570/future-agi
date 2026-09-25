@@ -1,29 +1,27 @@
 /**
- * Personas and supporting personas.
+ * Personas.
  *
- * A **persona** is the counterpart the agent deals with — the caller, the
- * customer, the operator on the other end. A **supporting persona** enters
- * partway through: a supervisor asked for by name, a fraud desk that has to
- * approve something, a third party on a transferred call.
+ * A **persona** is who the agent serves — the caller, the customer, the
+ * operator on the other end. The persona states the goal.
+ *
+ * Third parties that join the run with a goal of their own — a supervisor, a
+ * fraud desk, someone speaking for the account holder — are not personas. They
+ * are actors, and they live in actors.js. A failing downstream service is
+ * neither: it is a fault in the world's tool handlers.
  *
  * A scenario has always carried a persona. These are the reusable briefs those
- * personas are drawn from, plus the supporting cast that joins mid-run — which
- * is why they live in a library rather than inside one environment: the same
- * difficult caller is worth pointing at every agent you own.
+ * personas are drawn from — which is why they live in a library rather than
+ * inside one environment: the same difficult caller is worth pointing at every
+ * agent you own.
  *
  * They are versioned for the same reason scenarios are. If a result moves, it
  * has to be attributable to the agent rather than to a brief somebody rewrote.
- *
- * Deliberately not called "actors": in RL, an actor is the policy being trained
- * (actor-critic) or a rollout worker, so on a screen that also exposes
- * reset/step/reward the word would point at the wrong thing entirely.
  */
 
 const iso = (d) => new Date(Date.now() - d * 86400000).toISOString();
 
 export const PERSONA_KINDS = [
-  { id: "persona", label: "Persona", blurb: "The counterpart the agent is dealing with" },
-  { id: "supporting", label: "Supporting persona", blurb: "Enters partway through — a supervisor, a third party" },
+  { id: "persona", label: "Persona", blurb: "Who the agent is serving" },
 ];
 
 /** Which modalities a persona makes sense in. */
@@ -87,57 +85,6 @@ export const PERSONA_LIBRARY = [
     ],
     usedBy: 7,
     owner: "you",
-  },
-  {
-    id: "sup-supervisor",
-    kind: "supporting",
-    name: "Supervisor",
-    blurb: "Asked for by name. Joins only when the agent escalates, and expects a handover summary.",
-    modalities: ["voice", "chat"],
-    traits: ["brisk", "wants the summary first"],
-    version: "v2",
-    versions: [
-      { label: "v2", createdAt: iso(6), note: "Now refuses the handover if no summary is given." },
-      { label: "v1", createdAt: iso(28), note: "First draft." },
-    ],
-    usedBy: 5,
-    owner: "you",
-  },
-  {
-    id: "sup-fraud-desk",
-    kind: "supporting",
-    name: "Fraud desk",
-    blurb: "Has to approve anything above the refund cap, and takes its time.",
-    modalities: ["voice", "chat"],
-    traits: ["procedural", "slow to answer"],
-    version: "v1",
-    versions: [{ label: "v1", createdAt: iso(15), note: "Approves 60% of the time." }],
-    usedBy: 3,
-    owner: "system",
-  },
-  {
-    id: "sup-third-party",
-    kind: "supporting",
-    name: "Third party on the line",
-    blurb: "A partner or family member speaking for the account holder — tests what the agent will disclose.",
-    modalities: ["voice"],
-    traits: ["helpful", "not authorised"],
-    version: "v1",
-    versions: [{ label: "v1", createdAt: iso(9), note: "Never has the security answers." }],
-    usedBy: 2,
-    owner: "you",
-  },
-  {
-    id: "sup-flaky-tool",
-    kind: "supporting",
-    name: "Flaky downstream service",
-    blurb: "Not a person — the payment API timing out mid-call. Tests recovery rather than dialogue.",
-    modalities: ["voice", "chat", "cua", "coding"],
-    traits: ["intermittent", "slow"],
-    version: "v1",
-    versions: [{ label: "v1", createdAt: iso(4), note: "Fails one call in four." }],
-    usedBy: 6,
-    owner: "system",
   },
 ];
 

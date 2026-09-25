@@ -25,11 +25,13 @@ import { effectiveModality } from "../_mock/rlContract";
 import { taskToVoiceData } from "../_mock/voiceCallData";
 import AddEvalsDrawer from "../workspace/evals/AddEvalsDrawer";
 import { useEnvState } from "../store";
+import useRunFitCheck from "./useRunFitCheck";
 import { protoRunId } from "../_mock/executionAdapter";
 import { runSummaries, trialSummaries, chipIdentity as computeChipIdentity } from "../_mock/comparison";
 import { resolveEval } from "../_mock/evals";
 import TraceTable, { TraceGroupByPicker, TraceColumnsPicker, defaultTraceColumns, deriveUseCaseLabel } from "./TraceTable";
 import FixMyAgentDrawer from "./fixmyagent/FixMyAgentDrawer";
+import { passRateOf } from "./taskOutcome";
 
 /**
  * Run results.
@@ -205,6 +207,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
   const [addingEvals, setAddingEvals] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const { envState, patch, addAgentVersion } = useEnvState(envId);
+  const { check: checkRunFit, dialog: runFitDialog } = useRunFitCheck(env, envState, patch);
 
   /*
     Which run this is. The header said "Run complete" and then printed the raw
@@ -288,10 +291,14 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
     the button said and buries the four scenarios someone was actually chasing.
     The subset travels with the run and the run records that it was a subset.
   */
-  const rerun = (ids) => {
+  /* A re-run repeats the test it came from — same number of trials. */
+  const rerun = (ids) => checkRunFit(() => {
     const url = paths.dashboard.simulate.simulationRun(envId, protoRunId(envId, Date.now().toString(36)));
-    navigate(ids?.length ? `${url}?only=${ids.join(",")}` : url);
-  };
+    const q = new URLSearchParams();
+    if (ids?.length) q.set("only", ids.join(","));
+    q.set("trials", String((envState.runs || []).find((r) => r.id === runId)?.repeats || 3));
+    navigate(`${url}?${q.toString()}`);
+  });
 
   const toggle = (id) =>
     setSelected((prev) => {
@@ -425,6 +432,7 @@ export default function RunResults({ env, runId, tasks, stats, evals, stage, see
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {runFitDialog}
       {/* ── header ── */}
       <Stack
         direction="row" alignItems="center" spacing={2}
@@ -1027,7 +1035,9 @@ function RunSummaryStrip({ tasks, evals }) {
   });
   const measured = buckets.passed + buckets.failed + buckets.flaky;
   const total = tasks.length;
-  const passPct = measured ? Math.round((buckets.passed / measured) * 100) : 0;
+  /* The same rate every other screen shows: mean pass share over measured
+     scenarios, so a flaky scenario counts for the samples it passed. */
+  const passPct = Math.round(passRateOf(tasks) ?? 0);
 
   const evalStats = (evals || []).map((e) => {
     let pass = 0, fail = 0, run = 0;

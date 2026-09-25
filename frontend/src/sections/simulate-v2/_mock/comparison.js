@@ -16,7 +16,7 @@
 import { buildRun } from "./runStream";
 import { resolveEval } from "./evals";
 import { getSurface } from "./surfaces";
-import { versionNumber } from "./versions";
+import { runEnvVersion, runInputs } from "./toolFit";
 import { attribute, domainTally, isMeasured, faultReason } from "./failures";
 import { episodeReturn } from "./reward";
 import { checklistSteps } from "./callDetail";
@@ -52,25 +52,23 @@ export const runScenarios = (envState, run) => {
   return { scenarios, dropped: run.scenarioIds.length - scenarios.length };
 };
 
-/** The tasks a stored run produced, rebuilt from its id.
- *  Each successive run improves over the last: failRate decays with the run's
- *  ordinal so the eval graph trends upward across a history — every new run
- *  reads as an improvement on the previous, which is the concept simulated
- *  runs are supposed to demonstrate here. */
+/** The tasks a stored run produced, rebuilt from its id and the pairing it
+ *  pinned: the agent version (how well it does, which tools it calls), the
+ *  environment version (which tools the world answers) and the graders that
+ *  were applied when it ran. */
 export const rebuildRun = (env, envState, run) => {
-  const ordinal = Math.max(1, run.ordinal || 1);
-  /* Baseline 0.22 for Run 1, drops ~4 points each subsequent run, floors at
-     0.05 so late runs still surface a scenario or two the agent gets wrong. */
-  const failRate = Math.max(0.05, 0.22 - (ordinal - 1) * 0.04);
+  const inputs = runInputs(env, envState, {
+    agent: run.agentVersion,
+    envVersion: runEnvVersion(env, envState, run),
+    actors: run.actors,
+  });
   return buildRun({
     seed: run.id,
     scenarios: runScenarios(envState, run).scenarios,
     stage: getSurface(env?.surface).stage,
-    evals: evalsOf(envState),
-    tools: env?.tools || [],
+    evals: (run.evals || envState?.evals || []).map(resolveEval).filter(Boolean),
     repeats: run.repeats || 1,
-    phrasing: versionNumber(run.agentVersion),
-    failRate,
+    ...inputs,
   }).tasks.map((t) => ({ ...t, status: t.verdict }));
 };
 
@@ -124,12 +122,13 @@ export const runSummary = (env, envState, run, index) => {
        versions with a fixed agent isolates world drift; a comparison
        across agent versions with a fixed env isolates the agent.
 
-       Runs recorded before this field existed fall back to the newest
-       env version at read time — not perfect (a very old run against a
-       long-gone world will show whatever's newest today), but better
-       than a blank pill that reads as "env unknown" on every seed row.
-       If the row has its own stamp, we trust it. */
-    envVersion: run.envVersion || envState?.envVersions?.slice(-1)[0]?.label || "v3",
+       Runs recorded before this field existed predate every version
+       minted in the app, so they fall back to the newest version that was
+       not minted here (the seeded history) — never to one rebuilt later,
+       which would claim an old run was taken on a world that did not
+       exist yet. If the row has its own stamp, we trust it. */
+    envVersion: runEnvVersion(env, envState, run),
+    toolGap: run.toolGap || [],
     tasks,
     total: tasks.length,
     passed,
@@ -209,6 +208,10 @@ const SI_TRIAL_COLORS = [
   "#2563EB", "#16A34A", "#EA580C", "#4F46E5",
 ];
 
+/* What a self-improvement trial did to a scenario that changes its outcome.
+   "same" and "still-failing" leave the source run's own outcome in place. */
+export const TRIAL_CHANGES = { fixed: "passed", passed: "passed", broke: "failed" };
+
 export const trialSummaries = (env, envState) => {
   const opts = envState?.optimizations || [];
   if (!opts.length) return [];
@@ -248,7 +251,13 @@ export const trialSummaries = (env, envState) => {
       const jitter = 0.88 + (((trial.n * 37) + optIdx * 13) % 25) / 100;
       const scores = Object.fromEntries(evalIds.map((id) => [id, passRate]));
       const finishedAt = new Date(baseFinishedAt + tIdx * 60_000).toISOString();
-      const passed = Math.round((passRate / 100) * scenarioCount);
+      /* A trial is scored on the training split only — the held-out
+         scenarios are what the winner is checked against afterwards. So a
+         trial row covers those scenarios, and says so (partial), rather than
+         reading as a full sweep of the environment. */
+      const trialIds = Object.keys(trial.perScenario || {});
+      const covered = trialIds.length || scenarioCount;
+      const passed = Math.round((passRate / 100) * covered);
 
       results.push({
         id: `${opt.id}-t${trial.n}`,
@@ -270,13 +279,15 @@ export const trialSummaries = (env, envState) => {
         finishedAt,
         agentVersion: sourceRun?.agentVersion || opt.baseAgentVersion || "trial",
         envVersion: sourceRun?.envVersion,
-        total: scenarioCount,
+        scenarioIds: trialIds,
+        partial: true,
+        total: covered,
         passed,
         flaky: 0,
         dropped: 0,
-        measured: scenarioCount,
+        measured: covered,
         unmeasured: 0,
-        repeats: 1,
+        repeats: sourceRun?.repeats || 1,
         meanReturn: null,
         passRate,
         avgDurationMs: Math.round((sourceRun?.avgDurationMs || 10000) * jitter),
@@ -419,6 +430,21 @@ const pct = (now, before) => {
   and the compare page render a run with the same label and colour it has in
   the detail header — one identity, assigned once at the source.
 */
+/**
+ * The number each row shows as "Run N" on the runs list — manual runs and the
+ * listed self-improvement trials in one chronological sequence. Compare and
+ * the run header read the same numbers, so a run is called the same thing on
+ * every screen. The runs list applies exactly this rule.
+ */
+export const LISTED_TRIAL_CAP = 8;
+export const listOrdinals = (env, envState) => {
+  const when = (r) => new Date(r.finishedAt || r.startedAt || Date.now()).getTime();
+  const byFinish = (a, b) => when(a) - when(b);
+  const trials = trialSummaries(env, envState).slice().sort(byFinish).slice(0, LISTED_TRIAL_CAP);
+  const ordered = [...runSummaries(env, envState), ...trials].filter((r) => !r.synthetic).sort(byFinish);
+  return new Map(ordered.map((r, i) => [r.id, i + 1]));
+};
+
 export const chipIdentity = (env, envState) => {
   /* One identity per row, taken from the row's own stamped letter/colour
      (runs: their ordinal; trials: `T{n}`). Reusing them — rather than
@@ -458,8 +484,11 @@ export const buildComparison = (env, envState, runIds) => {
         const baseTasks = rebuildRun(env, envState, source);
         const tasks = baseTasks.map((task) => {
           const outcome = per[task.scenarioId] || per[task.id];
-          if (!outcome) return task;
-          const passed = outcome === "passed" || outcome === "fixed";
+          /* Only what the trial changed moves: a fix passes, a break fails,
+             and a scenario that stayed the same keeps its own outcome —
+             passing, flaky or failing — rather than being flattened. */
+          if (!outcome || !TRIAL_CHANGES[outcome]) return task;
+          const passed = TRIAL_CHANGES[outcome] === "passed";
           const score = passed ? 0.95 : 0.2;
           const evalResults = (task.evalResults || []).map((r) => ({
             ...r, score, passed,
@@ -492,20 +521,21 @@ export const buildComparison = (env, envState, runIds) => {
         detail views need. Then overlay the trial's per-scenario
         outcomes so the verdicts match what the trial actually saw.
       */
-      const scenarios = envState?.scenarios || [];
+      const trialIds = new Set(Object.keys(per));
+      const scenarios = (envState?.scenarios || []).filter((sc) => !trialIds.size || trialIds.has(sc.id));
+      const agent = opt.baseAgentVersion || "v1";
       const built = buildRun({
         seed: id,
         scenarios,
         stage: getSurface(env?.surface).stage,
         evals: evalsOf(envState),
-        tools: env?.tools || [],
         repeats: 1,
-        phrasing: versionNumber(opt.baseAgentVersion || "v1"),
+        ...runInputs(env, envState, { agent, envVersion: runEnvVersion(env, envState, {}) }),
       }).tasks.map((task) => ({ ...task, status: task.verdict }));
       const tasks = built.map((task) => {
         const outcome = per[task.scenarioId] || per[task.id];
-        if (!outcome) return task;
-        const passed = outcome === "passed" || outcome === "fixed";
+        if (!outcome || !TRIAL_CHANGES[outcome]) return task;
+        const passed = TRIAL_CHANGES[outcome] === "passed";
         const score = passed ? 0.95 : 0.2;
         const evalResults = (task.evalResults || []).map((r) => ({
           ...r, score, passed,
@@ -531,6 +561,15 @@ export const buildComparison = (env, envState, runIds) => {
     });
 
   if (runs.length === 0) return { runs: [], rows: [], evals: [], coverage: null };
+  /* Same "Run N" as the runs list. */
+  const ordinals = listOrdinals(env, envState);
+  runs.forEach((run) => {
+    const n = ordinals.get(run.id);
+    if (!n) return;
+    run.ordinal = n;
+    run.letter = String(n);
+    run.color = RUN_COLORS[(n - 1) % RUN_COLORS.length];
+  });
 
   const baseline = runs[0];
 
@@ -626,9 +665,27 @@ export const buildComparison = (env, envState, runIds) => {
     claim the moment it stops being true.
   */
   const shared = rows.filter((r) => !r.missing).length;
+  /*
+    The headline rate is read over the same questions for every run: the
+    scenarios every run ran and measured. A whole-run rate from a 4-scenario
+    re-run and one from a 68-scenario sweep are different quantities.
+  */
+  const common = rows.filter((r) => r.cells.every((c) => c.status !== "missing" && c.measured));
+  runs.forEach((run, i) => {
+    const shares = common.map((r) => r.cells[i].passShare).filter((v) => v != null);
+    run.sharedPassRate = shares.length ? Math.round((shares.reduce((a, b) => a + b, 0) / shares.length) * 100) : null;
+  });
+  /* Whether the runs took the same test: environment version and graders. */
+  const envVersions = [...new Set(runs.map((r) => r.envVersion).filter(Boolean))];
+  const graderKey = (r) => JSON.stringify((r.evals || envState?.evals || []).map((e) => (typeof e === "string" ? e : `${e.id}:${e.threshold ?? ""}`)).sort());
+  const graderSets = new Set(runs.map(graderKey));
   const coverage = {
     total: rows.length,
     shared,
+    common: common.length,
+    envVersions,
+    sameGraders: graderSets.size <= 1,
+    toolGapRuns: runs.filter((r) => r.toolGap?.length).map((r) => r.id),
     partial: rows.length - shared,
     /* Rows where at least one run produced no verdict at all. */
     unmeasured: rows.filter((r) => r.unmeasured).length,

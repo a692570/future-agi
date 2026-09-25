@@ -9,7 +9,7 @@ import SideDrawer from "../components/SideDrawer";
 import Iconify from "src/components/iconify";
 import {
   ACTOR_LIBRARY, ENTRY_KINDS, PRESSURE_KINDS, MODALITIES,
-  castFor, getPressure, getEntry,
+  actorsOf, getPressure, getEntry,
 } from "../_mock/actors";
 import { SectionCard, EmptyState } from "../components/primitives";
 
@@ -32,7 +32,7 @@ import { SectionCard, EmptyState } from "../components/primitives";
  */
 export default function ActorsPanel({ env, envState, patch, onGo }) {
   const [editing, setEditing] = useState(null);
-  const cast = envState.actors || castFor(env);
+  const cast = actorsOf(env, envState);
 
   /*
     Only the actors already in the environment render — the "Library"

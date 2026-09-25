@@ -61,6 +61,9 @@ const hash = (s = "") => {
  */
 export const provedAgainst = (row, env, envState) => {
   if (row?.provedAgainst) return row.provedAgainst;
+  /* A scenario a rebuild wrote was proved against the version it was
+     written for. */
+  if (row?.addedInEnv) return row.addedInEnv;
   const versions = environmentVersions(env, envState);
   const oldest = versions[versions.length - 1];
   /* Two in five were carried over from the previous world. Deterministic, so
@@ -107,8 +110,20 @@ export const proofStatus = (row, env, envState) => {
     return { proved, current: current.label, stale: false, reasons: [], since: [] };
   }
 
+  /*
+    What separates the two worlds, in whichever direction. Proved on an older
+    world than the pinned one: the versions after it, up to the pinned one.
+    Proved on a *newer* world than the pinned one (someone pinned back): the
+    versions between them too — the proof was never true of this older world,
+    and only looking forward used to call it valid.
+  */
   const provedIndex = versions.findIndex((v) => v.label === proved);
-  const since = versions.slice(0, provedIndex === -1 ? versions.length : provedIndex);
+  const currentIndex = versions.findIndex((v) => v.label === current.label);
+  const since = provedIndex === -1
+    ? versions.slice(currentIndex)
+    : provedIndex > currentIndex
+      ? versions.slice(currentIndex, provedIndex)
+      : versions.slice(provedIndex, currentIndex);
   const reasons = [...new Set(since.flatMap((v) => v.changed || []))]
     .filter((c) => INVALIDATING[c]);
 

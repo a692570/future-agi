@@ -2,15 +2,14 @@ import PropTypes from "prop-types";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSnackbar } from "notistack";
 import {
-  Box, Stack, Typography, Button, Tooltip, IconButton, Tab,
+  Box, Stack, Typography, Button, Tooltip, IconButton,
   TextField, Popover, Checkbox, InputBase, Menu, MenuItem, ListItemIcon,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { SegmentedTabs } from "src/components/tabs/tabs";
 import { alpha } from "@mui/material/styles";
 import { SectionCard, PersonaBadge } from "../components/primitives";
 import { generatedPool } from "../_mock/scenarios";
-import { staleScenarios, proofStatus, reproved, autoReprove, brokenScenarios, markEdited, INVALIDATING } from "../_mock/proofs";
+import { staleScenarios, proofStatus, autoReprove, brokenScenarios, markEdited } from "../_mock/proofs";
 import { subTasksFor } from "../_mock/contract";
 import ScenarioDetail from "../components/ScenarioDetail";
 import CoverageMatrix from "./scenarios/CoverageMatrix";
@@ -18,8 +17,6 @@ import AddScenariosDrawer from "./scenarios/AddScenariosDrawer";
 import ScenarioEditor from "./scenarios/ScenarioEditor";
 import ScenarioTable from "./scenarios/ScenarioTable";
 import SelectionBar from "./scenarios/SelectionBar";
-import RecentAdditionsStrip from "./scenarios/RecentAdditionsStrip";
-import GateRejects from "./scenarios/GateRejects";
 import { PickRouteIllustration } from "./scenarios/RouteThumbs";
 import {
   publishScenarioSelection,
@@ -37,9 +34,14 @@ const SOURCE_MAP = {
   production: "production",
   dataset: "dataset-import",
   script: "manual",
-  generate: "builder-chat",
+  generate: "derived",
 };
 import { FilterPanel } from "src/components/filter-panel";
+import { currentAgentVersion, currentEnvVersion } from "../_mock/versions";
+import { agentToolsFor, knownToolsFor, requiredToolsOf, worldToolsFor } from "../_mock/toolFit";
+import { needsAttention, scenarioStatus } from "../_mock/scenarioStatus";
+import SideDrawer from "../components/SideDrawer";
+import { ScenarioRowContext } from "./scenarios/scenarioRowContext";
 
 
 /**
@@ -78,7 +80,11 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   /* When set, the list narrows to just the broken scenarios. Turned on by
      the red banner's "Show them" button so a user can go from "N broke"
      straight to those exact rows without hunting through 68. */
-  const [focusBroken, setFocusBroken] = useState(false);
+  /* Quick filter above the list: all, release blockers, or the rows that
+     need attention (broken, quarantined, stale, or not part of / not
+     answerable by the pinned world). */
+  const [quick, setQuick] = useState("all");
+  const [coverageOpen, setCoverageOpen] = useState(false);
   /* Row-level facet filter — same shape the rest of the product uses
      (Runs list, Improvements list). Four dimensions, each a multi-select. */
   const [filters, setFilters] = useState({});
@@ -118,7 +124,43 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   const toggleGroupHidden = (id) => setHiddenGroupIds((prev) => (
     prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
   ));
-  const selected = envState?.scenarios || [];
+  const selected = useMemo(() => envState?.scenarios || [], [envState?.scenarios]);
+
+  /* What each row is checked against: the pinned environment version and
+     the tools its world answers. One status per row, read by the chips and
+     the table's Status column alike. */
+  const envLabel = currentEnvVersion(env, envState).label;
+  const answers = useMemo(
+    () => new Set(worldToolsFor(env, envState).map((t) => t.name)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState.envVersions, envState.activeEnvVersion],
+  );
+  const knownTools = useMemo(
+    () => knownToolsFor(env, envState),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState.envVersions, envState.agentVersions],
+  );
+  const toolsOf = (r) => requiredToolsOf(r, knownTools);
+  const statusCtx = { env, envState, envVersion: envLabel, answers, buildMode };
+  const statusById = useMemo(
+    () => new Map(selected.map((r) => [r.id, scenarioStatus({ ...r, requiredTools: requiredToolsOf(r, knownTools) }, statusCtx)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, env, envState.envVersions, envState.activeEnvVersion, answers, knownTools, buildMode],
+  );
+  const statusOf = (r) => statusById.get(r.id) || scenarioStatus(r, statusCtx);
+  /* Which tools the agent version under test calls — a scenario needing
+     one it doesn't still runs, and measures that gap. */
+  const agentLabel = currentAgentVersion(envState)?.label;
+  const agentCalls = useMemo(
+    () => new Set(agentToolsFor(env, envState, agentLabel).map((t) => t.name)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [env, envState.agentVersions, agentLabel],
+  );
+  const rowContext = { statusOf, toolsOf, answers, agentCalls, agentLabel };
+  const blockerCount = selected.filter((r) => r.critical).length;
+  const attentionCount = selected.filter((r) => needsAttention(statusOf(r))).length;
+  const matchesQuick = (r) => (quick === "blockers" ? !!r.critical
+    : quick === "attention" ? needsAttention(statusOf(r)) : true);
 
   const q = query.trim().toLowerCase();
 
@@ -186,7 +228,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   ], [personaChoices, subgoalChoices]);
 
   const shown = selected.filter((r) => {
-    if (focusBroken && !r.provedBroke) return false;
+    if (!matchesQuick(r)) return false;
     if (!matchesFilters(r)) return false;
     if (!q) return true;
     const hay = `${r.name || ""} ${r.summary || ""} ${r.title || ""} ${r.task || ""} ${r.useCase || ""}`.toLowerCase();
@@ -239,8 +281,29 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
       const stampSource = SOURCE_MAP[source] || "manual";
       const stampAt = new Date().toISOString();
       const batchId = defaultBatchId(stampSource, stampAt);
-      const fresh2 = fresh.map((r) => stampProvenance(r, { source: stampSource, at: stampAt, batchId }));
-      patch({ scenarios: [...selected, ...fresh2], scenarioSource: source });
+      /* A new scenario is proved against the world it is added to, and says
+         which tools it needs — so one that needs a tool this world can't
+         answer is caught now, not scored wrongly later. */
+      const envLabel = currentEnvVersion(env, envState).label;
+      const known = knownToolsFor(env, envState);
+      const answers = new Set(worldToolsFor(env, envState).map((t) => t.name));
+      const fresh2 = fresh.map((r) => ({
+        ...stampProvenance(r, { source: stampSource, at: stampAt, batchId }),
+        requiredTools: requiredToolsOf(r, known),
+        provedAgainst: r.provedAgainst || envLabel,
+        provedAt: r.provedAt || stampAt,
+      }));
+      const unanswerable = [...new Set(fresh2.flatMap((r) => r.requiredTools.filter((t) => !answers.has(t))))];
+      /* The environment's own source (how it was first populated) is not
+         whichever add route was used last. */
+      patch({ scenarios: [...selected, ...fresh2], ...(!envState.scenarioSource && { scenarioSource: source }) });
+      if (unanswerable.length) {
+        const n = fresh2.filter((r) => r.requiredTools.some((t) => !answers.has(t))).length;
+        enqueueSnackbar(
+          `${n} of these need ${unanswerable.join(", ")}, which environment ${envLabel} can't answer — they come back not measured until the environment is rebuilt.`,
+          { variant: "warning", autoHideDuration: 7000 },
+        );
+      }
       const base = fresh.length === 1
         ? "1 scenario added"
         : `${fresh.length} scenarios added`;
@@ -360,7 +423,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      `autoReprove` and stays on the scenario until the user edits/removes
      it, so this is stable across renders. */
   const broken = buildMode ? [] : brokenScenarios(selected);
-  const brokenReasons = [...new Set(broken.flatMap((s) => s.brokeReasons || []))];
 
   /* Auto re-prove the moment we notice drift. Every scenario whose proof
      still holds gets restamped to the current env version; the ~20% that
@@ -401,7 +463,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
             )}
           </Stack>
           <Typography sx={{ typography: "s2", color: "text.secondary" }}>
-            Each scenario is one task your agent has to complete, and carries its own persona.
+            Each scenario is one task your agent has to complete, with its own caller. These belong to
+            environment {envLabel} — every agent version runs the same ones.
           </Typography>
         </Box>
         {/*
@@ -434,6 +497,46 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
         )}
       </Stack>
 
+      {/* Quick filters — the two questions people arrive with — and the
+          coverage report one click away. */}
+      {selected.length > 0 && (
+        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 1.5, flexWrap: "wrap", rowGap: 0.75 }}>
+          {[
+            { id: "all", label: "All", count: selected.length },
+            { id: "blockers", label: "Release blockers", count: blockerCount },
+            { id: "attention", label: "Needs attention", count: attentionCount, tone: broken.length ? "#DC2626" : attentionCount ? "#CA8A04" : null },
+          ].map((c) => {
+            const active = quick === c.id;
+            return (
+              <Box
+                key={c.id}
+                onClick={() => setQuick(c.id)}
+                sx={{
+                  display: "inline-flex", alignItems: "center", gap: 0.75, height: 30, px: 1.25,
+                  borderRadius: 1, cursor: "pointer", border: "1px solid",
+                  borderColor: active ? "text.primary" : "divider",
+                  bgcolor: active ? "action.selected" : "transparent",
+                  "&:hover": { borderColor: active ? "text.primary" : "text.disabled" },
+                }}
+              >
+                {c.tone && c.count > 0 && <Box sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: c.tone }} />}
+                <Typography sx={{ typography: "s2", fontWeight: active ? 700 : 500 }}>{c.label}</Typography>
+                <Typography sx={{ typography: "s2", color: "text.subtitle", fontVariantNumeric: "tabular-nums" }}>{c.count}</Typography>
+              </Box>
+            );
+          })}
+          <Box flex={1} />
+          <Button
+            size="small"
+            onClick={() => setCoverageOpen(true)}
+            startIcon={<Iconify icon="solar:chart-square-linear" width={15} />}
+            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", "&:hover": { color: "text.primary", bgcolor: "action.hover" } }}
+          >
+            Coverage
+          </Button>
+        </Stack>
+      )}
+
       {broken.length > 0 && (
         <Stack
           direction="row" alignItems="flex-start" spacing={1.5}
@@ -455,7 +558,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
             <Button
               variant="contained" color="primary" size="small"
-              onClick={() => setFocusBroken(true)}
+              onClick={() => setQuick("attention")}
               startIcon={<Iconify icon="solar:eye-linear" width={14} />}
               sx={{ typography: "s2", fontWeight: 700 }}
             >
@@ -464,10 +567,16 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
             <Button
               variant="outlined" size="small"
               onClick={() => {
-                /* Keep the scenarios but drop the broken flag — user has
-                   accepted the current state as OK and wants to keep them. */
-                patch({ scenarios: selected.map((s) => (s.provedBroke ? { ...s, provedBroke: false, brokeReasons: [] } : s)) });
-                setFocusBroken(false);
+                /* Keep the scenarios and accept them on the current world —
+                   stamped as proved against it, so the next auto re-prove
+                   doesn't flag them all over again. */
+                const label = currentEnvVersion(env, envState).label;
+                const at = new Date().toISOString();
+                patch({
+                  scenarios: selected.map((s) => (s.provedBroke
+                    ? { ...s, provedBroke: false, brokeReasons: [], provedAgainst: label, provedAt: at }
+                    : s)),
+                });
               }}
               sx={{ typography: "s2", fontWeight: 700, color: "text.primary", borderColor: "divider" }}
             >
@@ -477,17 +586,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
         </Stack>
       )}
 
-      {/* Coverage summary — collapsed by default so users see the
-          three numbers (Axes / Pairs / Forced) the moment they land
-          on the tab, without the panel pushing the list down. Click
-          to unfurl the full per-axis + pairwise + guardrails report.
-          Previously this sat at the bottom of the tab, which meant
-          users had to scroll past 80+ rows to know it existed. */}
-      {selected.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <CoverageMatrix scenarios={selected} env={env} />
-        </Box>
-      )}
 
       {selected.length === 0 ? (
         <RoutePlaceholder env={genEnv} onAdd={() => setAdding(true)} />
@@ -605,27 +703,46 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
               aiPlaceholder="Ask AI — e.g. 'show me critical scenarios with the impatient persona'"
               placement="bottom-start"
             />
-            {(q.length > 0 || hiddenCount > 0 || focusBroken || filterCount > 0) && (
+            {(q.length > 0 || hiddenCount > 0 || quick !== "all" || filterCount > 0) && (
               <>
-                <Typography sx={{ typography: "s3", color: focusBroken ? "#DC2626" : "text.subtitle", whiteSpace: "nowrap" }}>
-                  {focusBroken
-                    ? `Showing ${shown.length} broken`
-                    : `${shown.length} of ${selected.length}${hiddenCount > 0 ? ` · ${hiddenCount} group${hiddenCount === 1 ? "" : "s"} hidden` : ""}`}
+                <Typography sx={{ typography: "s3", color: "text.subtitle", whiteSpace: "nowrap" }}>
+                  {`${shown.length} of ${selected.length}${hiddenCount > 0 ? ` · ${hiddenCount} group${hiddenCount === 1 ? "" : "s"} hidden` : ""}`}
                 </Typography>
                 <Button
                   size="small"
-                  onClick={() => { setQuery(""); setHiddenGroupIds([]); setFocusBroken(false); setFilters({}); }}
+                  onClick={() => { setQuery(""); setHiddenGroupIds([]); setQuick("all"); setFilters({}); }}
                   sx={{ typography: "s3", fontWeight: 600, color: "text.secondary" }}
                 >
-                  {focusBroken || (hiddenCount > 0 && !q && !filterCount) ? "Show all" : "Clear"}
+                  {quick !== "all" || (hiddenCount > 0 && !q && !filterCount) ? "Show all" : "Clear"}
                 </Button>
               </>
             )}
             <Box sx={{ flex: 1 }} />
-            <SegmentedTabs value={view} onChange={(_, v) => setView(v)} sx={{ flexShrink: 0 }}>
-              <Tab value="table" label="Table" />
-              <Tab value="list" label="List" />
-            </SegmentedTabs>
+            {/* Table or list — two icons, named on hover. */}
+            <Stack
+              direction="row"
+              sx={{ flexShrink: 0, border: "1px solid", borderColor: "divider", borderRadius: 1, p: 0.25 }}
+            >
+              {[
+                { id: "table", icon: "mdi:table", tip: "Table — every detail in columns" },
+                { id: "list", icon: "mdi:format-list-bulleted", tip: "List — one line each, expand to read" },
+              ].map((v) => (
+                <Tooltip key={v.id} arrow title={v.tip}>
+                  <IconButton
+                    size="small"
+                    onClick={() => setView(v.id)}
+                    sx={{
+                      borderRadius: 0.75, width: 30, height: 28,
+                      color: view === v.id ? "text.primary" : "text.subtitle",
+                      bgcolor: view === v.id ? "action.selected" : "transparent",
+                      "&:hover": { bgcolor: view === v.id ? "action.selected" : "action.hover" },
+                    }}
+                  >
+                    <Iconify icon={v.icon} width={16} />
+                  </IconButton>
+                </Tooltip>
+              ))}
+            </Stack>
           </Stack>
           )}
           </Box>
@@ -640,34 +757,46 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
             </Box>
           ) : (
             <>
-              {/* Batches are rendered as separate cards below this
-                  toolbar card. The toolbar card only contains the
-                  search / filter / group-by / view toggle; each batch
-                  gets its own card so authorship (added by · when)
-                  stays visually attached to its scenarios. */}
+              {/* Batches render as a timeline below this toolbar card. */}
             </>
           )}
         </SectionCard>
       )}
 
-      {/* v2 timeline: batches as chronological events on a vertical
-          spine with a node per batch. v1 (BatchCardsList) is kept in
-          this file for a one-line revert if v2 doesn't stick. */}
+
+      {/* Batches as chronological events on a vertical spine — who added
+          them and when — with the Group by groups inside each. */}
       {shown.length > 0 && (
-        <BatchTimeline
-          groups={shownGroups}
-          view={view}
-          env={env}
-          envState={envState}
-          buildMode={buildMode}
-          selectedIds={selectedIds}
-          onSelectionChange={handleSelectionChange}
-          onEdit={setEditing}
-          onRemove={removeScenario}
-          onHideGroup={toggleGroupHidden}
-          locked={locked}
-        />
+        <ScenarioRowContext.Provider value={rowContext}>
+          <BatchTimeline
+            groups={shownGroups}
+            view={view}
+            env={env}
+            envState={envState}
+            buildMode={buildMode}
+            selectedIds={selectedIds}
+            onSelectionChange={handleSelectionChange}
+            onEdit={setEditing}
+            onRemove={removeScenario}
+            onHideGroup={toggleGroupHidden}
+            locked={locked}
+          />
+        </ScenarioRowContext.Provider>
       )}
+
+      <SideDrawer open={coverageOpen} onClose={() => setCoverageOpen(false)} width={{ xs: "100%", md: 880 }}>
+        <Stack sx={{ height: "100%" }}>
+          <Stack direction="row" alignItems="center" sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+            <Typography sx={{ typography: "s1", fontWeight: 700, flex: 1 }}>Coverage</Typography>
+            <IconButton size="small" onClick={() => setCoverageOpen(false)}>
+              <Iconify icon="eva:close-fill" width={18} />
+            </IconButton>
+          </Stack>
+          <Box sx={{ flex: 1, overflowY: "auto", p: 2.5 }}>
+            <CoverageMatrix scenarios={selected} env={env} defaultExpanded />
+          </Box>
+        </Stack>
+      </SideDrawer>
 
       {/*
         Gate-rejects panel intentionally suppressed: the table shows
@@ -1016,163 +1145,6 @@ const groupScenarios = (rows, mode = "goal", env) => {
   return out;
 };
 
-/**
- * Batches as separate cards. Takes the flat list of inner groups
- * (produced by groupScenarios), bundles them back by batch, and
- * renders one card per batch with a prominent authorship header.
- *
- * Per user directive (2026-09-22): "Show each batches separately …
- * where is the added by / added at details for the batch?" Batches
- * are the outer container; scenarios within a batch use the inner
- * group-by (goal / persona / etc.).
- */
-function BatchCardsList({ groups, view, env, envState, buildMode, selectedIds, onSelectionChange, onEdit, onRemove, onHideGroup, locked }) {
-  /* Rebundle flat groups into batches so each batch gets its own
-     card. Groups arrive already sorted (batch → inner group) from
-     groupScenarios, so a simple sweep is enough. */
-  const batches = useMemo(() => {
-    const out = [];
-    let current = null;
-    groups.forEach((g) => {
-      const meta = g.batchMeta;
-      if (!meta) return;
-      if (!current || current.meta.batchId !== meta.batchId) {
-        current = { meta, innerGroups: [], rows: [] };
-        out.push(current);
-      }
-      current.innerGroups.push(g);
-      current.rows.push(...g.rows);
-    });
-    return out;
-  }, [groups]);
-
-  if (batches.length === 0) return null;
-
-  return (
-    <Stack spacing={3}>
-      {batches.map((b) => (
-        <BatchCard
-          key={b.meta.batchId}
-          batch={b.meta}
-          rowCount={b.rows.length}
-          innerGroups={b.innerGroups}
-          view={view}
-          env={env}
-          envState={envState}
-          buildMode={buildMode}
-          selectedIds={selectedIds}
-          onSelectionChange={onSelectionChange}
-          onEdit={onEdit}
-          onRemove={onRemove}
-          onHideGroup={onHideGroup}
-          locked={locked}
-        />
-      ))}
-    </Stack>
-  );
-}
-BatchCardsList.propTypes = {
-  groups: PropTypes.array, view: PropTypes.string,
-  env: PropTypes.object, envState: PropTypes.object, buildMode: PropTypes.bool,
-  selectedIds: PropTypes.array, onSelectionChange: PropTypes.func,
-  onEdit: PropTypes.func, onRemove: PropTypes.func, onHideGroup: PropTypes.func,
-  locked: PropTypes.bool,
-};
-
-function BatchCard({ batch, rowCount, innerGroups, view, env, envState, buildMode, selectedIds, onSelectionChange, onEdit, onRemove, onHideGroup, locked }) {
-  const [open, setOpen] = useState(true);
-  const src = sourceOf(batch.source);
-  const initials = (batch.addedBy?.name || "System").split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-  return (
-    <SectionCard sx={{ mb: 0 }}>
-      {/* Batch header: prominent authorship info + collapsible chevron */}
-      <Stack
-        direction="row" alignItems="center" spacing={2}
-        onClick={() => setOpen((v) => !v)}
-        sx={{
-          px: 2.5, py: 2, cursor: "pointer",
-          borderBottom: open ? "1px solid" : "none",
-          borderColor: "divider",
-          "&:hover": { bgcolor: "action.hover" },
-        }}
-      >
-        <Box sx={{
-          width: 36, height: 36, borderRadius: "50%",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.1 : 0.06),
-          color: "text.primary", fontSize: 12, fontWeight: 700, letterSpacing: 0.4,
-          flexShrink: 0,
-        }}>
-          {batch.addedBy?.kind === "user" ? initials : (
-            <Iconify icon={src.icon} width={16} />
-          )}
-        </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography sx={{ typography: "s1", fontWeight: 700, fontSize: 14 }}>
-              Added by {batch.addedBy?.name || "System"}
-            </Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 12 }}>
-              · {relativeTime(batch.addedAt)}
-            </Typography>
-          </Stack>
-          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 0.375 }}>
-            <Iconify icon={src.icon} width={11} sx={{ color: "text.subtitle" }} />
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 11.5 }}>
-              {src.label} · {new Date(batch.addedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </Typography>
-          </Stack>
-        </Box>
-        <Typography sx={{
-          typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums",
-          color: "text.primary", fontSize: 13, flexShrink: 0,
-        }}>
-          {rowCount} {rowCount === 1 ? "scenario" : "scenarios"}
-        </Typography>
-        <Iconify
-          icon={open ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"}
-          width={16} sx={{ color: "text.subtitle", flexShrink: 0 }}
-        />
-      </Stack>
-      {open && (
-        view === "table" ? (
-          <ScenarioTable
-            rows={innerGroups.flatMap((g) => g.rows)}
-            groups={innerGroups}
-            env={env}
-            onEdit={onEdit}
-            onRemove={onRemove}
-            onHideGroup={onHideGroup}
-            selectedIds={selectedIds}
-            onSelectionChange={onSelectionChange}
-            locked={locked}
-          />
-        ) : (
-          <GroupedScenarioList
-            groups={innerGroups}
-            env={env}
-            envState={envState}
-            buildMode={buildMode}
-            onEdit={onEdit}
-            onRemove={onRemove}
-            onHideGroup={onHideGroup}
-            selectedIds={selectedIds}
-            onSelectionChange={onSelectionChange}
-            locked={locked}
-          />
-        )
-      )}
-    </SectionCard>
-  );
-}
-BatchCard.propTypes = {
-  batch: PropTypes.object, rowCount: PropTypes.number, innerGroups: PropTypes.array,
-  view: PropTypes.string, env: PropTypes.object, envState: PropTypes.object, buildMode: PropTypes.bool,
-  selectedIds: PropTypes.array, onSelectionChange: PropTypes.func,
-  onEdit: PropTypes.func, onRemove: PropTypes.func, onHideGroup: PropTypes.func,
-  locked: PropTypes.bool,
-};
-
 /* ── v2 · timeline view ────────────────────────────────────────────
    An alternative to BatchCardsList (v1). Batches read as events on a
    vertical spine — like a git-log or activity feed. Each batch node
@@ -1210,7 +1182,7 @@ function BatchTimeline({ groups, view, env, envState, buildMode, selectedIds, on
         borderRadius: 1,
       }} />
       <Stack spacing={4}>
-        {batches.map((b, i) => (
+        {batches.map((b) => (
           <TimelineNode
             key={b.meta.batchId}
             batch={b.meta}
@@ -1226,7 +1198,7 @@ function BatchTimeline({ groups, view, env, envState, buildMode, selectedIds, on
             onRemove={onRemove}
             onHideGroup={onHideGroup}
             locked={locked}
-            defaultOpen={i === 0}
+            defaultOpen
           />
         ))}
       </Stack>
@@ -1377,6 +1349,7 @@ function TimelineNode({ batch, rowCount, innerGroups, view, env, envState, build
               rows={innerGroups.flatMap((g) => g.rows)}
               groups={innerGroups}
               env={env}
+              envVersion={currentEnvVersion(env, envState).label}
               onEdit={onEdit}
               onRemove={onRemove}
               onHideGroup={onHideGroup}
@@ -1410,6 +1383,7 @@ TimelineNode.propTypes = {
   onEdit: PropTypes.func, onRemove: PropTypes.func, onHideGroup: PropTypes.func,
   locked: PropTypes.bool, defaultOpen: PropTypes.bool,
 };
+
 
 /**
  * Just the grouped body — search, filter and view tabs live at the
@@ -1455,6 +1429,7 @@ function GroupedScenarioList({ groups, env, envState, buildMode, onEdit, onRemov
   );
 }
 GroupedScenarioList.propTypes = {
+  locked: PropTypes.bool,
   groups: PropTypes.array,
   env: PropTypes.object,
   envState: PropTypes.object,
@@ -1614,6 +1589,7 @@ function CollapsibleGroup({ group, env, envState, buildMode, onEdit, onRemove, o
   );
 }
 CollapsibleGroup.propTypes = {
+  locked: PropTypes.bool,
   group: PropTypes.object,
   env: PropTypes.object,
   envState: PropTypes.object,
@@ -1949,6 +1925,7 @@ function UseCaseFilterPopover({ anchorEl, onClose, allUseCases, countBy, selecte
   );
 }
 UseCaseFilterPopover.propTypes = {
+  dimensionLabel: PropTypes.string,
   anchorEl: PropTypes.any,
   onClose: PropTypes.func,
   allUseCases: PropTypes.array,

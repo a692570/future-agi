@@ -128,7 +128,7 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
           <Box flex={1} minWidth={0}>
             <Typography sx={{ typography: "m2", fontWeight: 600 }}>Add scenarios</Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-              Your agent&apos;s scenarios are already here. These add the ones reading it could not know to write.
+              This environment&apos;s scenarios are already here. These add the ones derivation could not know to write.
             </Typography>
           </Box>
           <IconButton size="small" onClick={close}>

@@ -9,6 +9,8 @@
  * Determinism matters: a stakeholder demo that shuffles its own results on
  * every reload is not a demo. Same seed in, same run out.
  */
+import { admissionOf } from "./coverage";
+import { inferTools } from "./toolInference";
 
 /* ── seeded RNG (mulberry32) ─────────────────────────────────────────────── */
 export function rng(seed) {
@@ -238,9 +240,18 @@ const STAGE_STEPS = {
  */
 function buildCallLog(scenario, tools, r, failed) {
   const named = (scenario.task || "").toLowerCase();
-  /* Tools the scenario is actually about: the ones it names, or the first
-     couple as a fallback so every task has something to be judged on. */
-  const required = tools.filter((t) => named.includes(t.name)).slice(0, 3);
+  /* Tools the scenario is actually about: the ones it records it needs, else
+     the ones it names, or the first couple as a fallback so every task has
+     something to be judged on. */
+  const recorded = Array.isArray(scenario.requiredTools) && scenario.requiredTools.length
+    ? tools.filter((t) => scenario.requiredTools.includes(t.name))
+    : [];
+  /* Recorded, else named, else read from its wording — the same inference
+     the Scenarios tab shows, so a run exercises the tools the row lists. */
+  const inferred = recorded.length ? [] : inferTools(scenario, tools);
+  const required = (recorded.length
+    ? recorded
+    : tools.filter((t) => named.includes(t.name) || inferred.includes(t.name))).slice(0, 3);
   /* Fallback picks from the scenario's own hash rather than the head of the
      list. Taking the first two made every failing task in a run skip the same
      tool, which reads as one bug repeated seven times rather than seven
@@ -320,10 +331,20 @@ export function buildRun({
   evals = [],
   concurrency = 4,
   failRate = 0.22,
+  /* What the world answers at the run's environment version. */
   tools = [],
+  /* What the agent version calls. Defaults to the world's tools — the agent
+     the environment was built from. Anything here the world lacks is a call
+     that goes unanswered. */
+  agentTools = null,
+  /* Third parties in the world ({ id, name, goal }). One joins some episodes
+     and pulls them off course — they are part of the environment's dynamics. */
+  actors = [],
   repeats = 3,
   phrasing = 0,
 }) {
+  const answers = new Set(tools.map((t) => t.name));
+  const gapTools = (agentTools || []).filter((t) => !answers.has(t.name));
   const r = rng(hashSeed(seed));
   const vocabFor = (sc) => (stage === "browser"
     ? BROWSER_VOCAB[browserAppOf(sc)]
@@ -359,9 +380,44 @@ export function buildRun({
       verdict and independently of it: whether the environment came up has
       nothing to do with how good the agent is.
     */
+    /* Who else is in this episode: the scenario's own cast if it names one,
+       otherwise one of the environment's actors joins about one in four.
+       Picked by hash, not by the run's random stream, so adding actors never
+       reshuffles the rest of the run. */
+    const ownCast = (sc.actors || []).map((id) => actors.find((a) => a.id === id)).filter(Boolean);
+    const actorHash = hashSeed(`${sc.id}:actor`);
+    const actor = ownCast[0] || (actors.length && actorHash % 4 === 0 ? actors[actorHash % actors.length] : null);
+    if (actor) {
+      const at = Math.min(steps.length - 1, 2 + (actorHash % Math.max(1, steps.length - 3)));
+      steps.splice(at, 0, {
+        id: `${sc.id}-actor`,
+        index: at,
+        role: "customer",
+        actorId: actor.id,
+        text: `${actor.name} cuts in — ${actor.goal}`,
+        duration: 900,
+      });
+      steps.forEach((st, k) => { st.index = k; });
+    }
+
     const fault = {};
     const faultDraw = r();
-    if (faultDraw < 0.035) {
+    /* A scenario the world can no longer stage (its proof broke, or it was
+       never admitted) has no verdict to give — it is the environment's to fix. */
+    const admission = admissionOf(sc);
+    /* The agent reached for a tool this world has no answer for. Scenarios
+       that need it always do; elsewhere the agent reaches for it now and then,
+       the way a new tool gets used. Deterministic per scenario and tool. */
+    const reached = gapTools.find((t) => (sc.requiredTools || []).includes(t.name)
+      || hashSeed(`${sc.id}:${t.name}`) % 6 === 0);
+    if (reached) {
+      fault.environment = `The agent called ${reached.name}, which this world can't answer — nothing came back, so the scenario can't be scored.`;
+      fault.toolGap = reached.name;
+    } else if (sc.provedBroke) {
+      fault.environment = "This scenario no longer stages on this world — its proof broke when the environment changed. Re-prove it before reading a verdict.";
+    } else if (!admission.admitted) {
+      fault.environment = `Quarantined — ${admission.reason}`;
+    } else if (faultDraw < 0.035) {
       fault.environment = `${tools[0]?.name || "The seeded world"} never passed its readiness probe — the scenario could not be staged.`;
     } else if (faultDraw < 0.07) {
       fault.transport = "The session dropped before the agent answered; no terminal state was reached.";
@@ -377,23 +433,33 @@ export function buildRun({
     if (!unmeasured && r() < 0.08) fault.simulatorDrift = true;
 
     // Critical scenarios fail more often — that is the point of marking them.
-    const failChance = sc.critical ? failRate * 1.9 : failRate;
+    // An actor pulling the other way makes the episode harder, too.
+    const failChance = (sc.critical ? failRate * 1.9 : failRate) + (actor ? 0.06 : 0);
     const draw = r();
     const failed = draw < failChance;
     const failStep = failed
       ? Math.max(2, Math.floor(steps.length * (0.45 + r() * 0.45)))
       : null;
 
+    /*
+      The graders decide. How well the agent did is drawn above; what the
+      scenario's verdict *is* comes from the applied evals against their own
+      thresholds. A sample passes only when every grader clears its bar, so a
+      strict grader (a PII check at 1.0) is honoured rather than decorative.
+      The eval that explains a failure is the culprit: the rule, then the goal.
+    */
+    const CULPRIT_ORDER = ["policy_adherence", "task_success", "pii_leakage"];
+    const culpritId = failed && evals.length
+      ? (CULPRIT_ORDER.find((id) => evals.some((ev) => ev.id === id)) || evals[0].id)
+      : null;
     const evalResults = evals.map((ev) => {
-      // The failing task should fail the eval that explains *why* it failed.
-      const isCulprit =
-        failed &&
-        (ev.id === "policy_adherence" ||
-          ev.id === "task_success" ||
-          ev.id === "pii_leakage");
-      const base = isCulprit ? 0.18 + r() * 0.34 : 0.72 + r() * 0.28;
-      const score = Math.round(base * 100) / 100;
-      const passedIt = score >= (ev.threshold ?? 0.8);
+      const threshold = ev.threshold ?? 0.8;
+      const isCulprit = ev.id === culpritId;
+      const base = isCulprit
+        ? threshold * (0.2 + r() * 0.6)
+        : threshold + (1 - threshold) * (0.25 + r() * 0.75);
+      const score = Math.min(1, Math.round(base * 100) / 100);
+      const passedIt = score >= threshold;
       return {
         id: ev.id,
         name: ev.name,
@@ -408,7 +474,10 @@ export function buildRun({
       };
     });
 
-    const callLog = buildCallLog(sc, tools, r, failed);
+    /* The verdict of the kept episode is the graders' — with no graders
+       applied there is nothing to read but whether the task got done. */
+    const gradedFail = evalResults.length ? evalResults.some((e) => !e.passed) : failed;
+    const callLog = buildCallLog(sc, tools, r, gradedFail);
 
     /*
       The remaining samples. The first one is the episode kept in full — its
@@ -416,7 +485,7 @@ export function buildRun({
       near-identical conversations helps nobody. The rest contribute their
       verdict, which is what the proportion is made of.
     */
-    const samples = [failed ? "failed" : "passed"];
+    const samples = [gradedFail ? "failed" : "passed"];
     /*
       Only scenarios near their own threshold disagree with themselves. Drawing
       each sample independently would make roughly half of every suite flaky,
@@ -428,7 +497,7 @@ export function buildRun({
     const margin = Math.abs(draw - failChance);
     const flipChance = Math.max(0, 0.55 - margin * 4);
     for (let k = 1; k < Math.max(1, repeats); k += 1) {
-      const flipped = r() < flipChance ? !failed : failed;
+      const flipped = r() < flipChance ? !gradedFail : gradedFail;
       samples.push(flipped ? "failed" : "passed");
     }
     const passes = samples.filter((v) => v === "passed").length;
@@ -461,6 +530,7 @@ export function buildRun({
          to a coarse id-derived label ("Routine tasks") and the two
          screens name the same buckets differently. */
       useCase: sc.useCase,
+      actor: actor ? { id: actor.id, name: actor.name } : null,
       worker: i % concurrency,
       steps,
       failStep,

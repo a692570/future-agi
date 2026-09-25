@@ -358,12 +358,10 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                     const list = envState?.envVersions?.length
                       ? envState.envVersions
                       : [...environmentVersions(env, envState)].reverse();
-                    patch({
-                      envVersions: [
-                        ...list,
-                        nextEnvVersion(env, envState, { changed: [changing], note: change.label }),
-                      ],
-                    });
+                    const minted = nextEnvVersion(env, envState, { changed: [changing], note: change.label });
+                    /* The new version keeps the world's learned tools and becomes
+                       the one runs use. */
+                    patch({ envVersions: [...list, minted], activeEnvVersion: minted.label });
                     setChanging(null);
                   }}
                   sx={{ typography: "s2", fontWeight: 700 }}
@@ -501,7 +499,9 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
           const list = envState?.envVersions?.length
             ? envState.envVersions
             : [...environmentVersions(env, envState)].reverse();
+          /* Restoring copies that version's world — tools included. */
           const forked = nextEnvVersion(env, envState, {
+            from: restoring.label,
             changed: restoring.changed || [],
             note: `Restored from ${restoring.label} — ${restoring.note}`,
           });

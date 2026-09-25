@@ -60,7 +60,7 @@ export default function PersonaEditorDrawer({ persona, env, envState, onClose, o
     });
   }, [persona, type, reset, env]);
 
-  const kind = PERSONA_KINDS.find((k) => k.id === (persona?.kind || "persona"));
+  const kind = PERSONA_KINDS.find((k) => k.id === persona?.kind) || PERSONA_KINDS[0];
 
   const submit = form.handleSubmit((values) => {
     onSave?.({
