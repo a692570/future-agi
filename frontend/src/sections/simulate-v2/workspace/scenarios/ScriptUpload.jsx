@@ -8,7 +8,7 @@ import { formatFileSize } from "src/utils/utils";
 import { scenariosFromScript } from "../../_mock/scenarios";
 import { SectionCard } from "../../components/primitives";
 import { ThinkingBar } from "../../components/loading";
-import { ScenarioRow } from "../ScenariosStep";
+import ScenarioRow from "./ScenarioRow";
 
 /**
  * Upload a script and pull the scenarios out of it.

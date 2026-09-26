@@ -134,35 +134,45 @@ export function stampProvenance(scenario, opts = {}) {
  */
 export function ensureProvenance(scenario) {
   if (scenario?.addedAt && scenario?.addedBy && scenario?.source) return scenario;
-  /* Back-fill for demo data: split existing scenarios into three
-     lanes with different human sources so the batch cards read as
-     "Vel added N scenarios via X" rather than "System · Auto-derived"
-     (per user directive 2026-09-22: "should be added by user name").
-     Deterministic per id-hash so the split is stable across renders. */
-  const idHash = hashInt(scenario?.id || "");
-  const lane = idHash % 3;
-  const laneSource = ["manual", "builder-chat", "dataset-import"][lane];
-  const laneDaysAgo = [1, 3, 6][lane];
-  const laneHour = [9, 15, 11][lane];
-  const at = new Date(Date.now() - laneDaysAgo * 24 * 3600 * 1000);
-  at.setHours(laneHour, 0, 0, 0);
-  const atIso = at.toISOString();
+  /* Back-fill for demo data, shaped like a real suite's history: most
+     scenarios arrived in one batch when the environment was built, and a
+     few smaller batches were added later — by you and by teammates, days
+     apart. A batch is one addition, not a kind of scenario. Deterministic
+     per id-hash so the split is stable across renders. */
+  const slot = hashInt(scenario?.id || "") % 100;
+  const lane = BACKFILL_LANES.find((l) => slot < l.upTo) || BACKFILL_LANES[0];
+  const at = new Date(Date.now() - lane.hoursAgo * 3600 * 1000);
+  at.setMinutes(0, 0, 0);
   return stampProvenance(scenario, {
-    source: laneSource,
-    actor: CURRENT_USER,
-    at: atIso,
-    batchId: `batch_${laneSource}_lane${lane}`,
+    source: lane.source,
+    actor: lane.actor,
+    at: at.toISOString(),
+    batchId: `batch_${lane.id}`,
   });
 }
 
+const TEAMMATE_MAYA = { kind: "user", id: "u_maya", name: "Maya Rao", email: "maya@example.com" };
+const TEAMMATE_ARJUN = { kind: "user", id: "u_arjun", name: "Arjun Kapoor", email: "arjun@example.com" };
+
+/* Oldest first. `upTo` is the cumulative share of scenarios in the lane. */
+const BACKFILL_LANES = [
+  { id: "build", upTo: 76, source: "derived", actor: CURRENT_USER, hoursAgo: 24 * 8 + 3 },
+  { id: "chat", upTo: 88, source: "builder-chat", actor: CURRENT_USER, hoursAgo: 24 * 4 + 6 },
+  { id: "dataset", upTo: 96, source: "dataset-import", actor: TEAMMATE_MAYA, hoursAgo: 24 * 2 - 2 },
+  { id: "manual", upTo: 100, source: "manual", actor: TEAMMATE_ARJUN, hoursAgo: 5 },
+];
+
 /**
  * Batch id — one generation session / drawer submit / chat turn = one
- * batch. Deterministic per (source, minute-bucket) so several scenarios
- * added in the same call carry the same batch id.
+ * batch. Every row of one addition carries the same id; two additions,
+ * however close together, never do.
  */
 export function defaultBatchId(source, atIso) {
-  const minute = Math.floor(Date.parse(atIso) / 60000);
-  return `batch_${source}_${minute}`;
+  /* To the millisecond, not the minute: two additions a few seconds apart
+     are two batches. Callers compute it once per addition and stamp every
+     row with it, so one addition still shares one id. */
+  const ms = Date.parse(atIso) || Date.now();
+  return `batch_${source}_${ms.toString(36)}`;
 }
 
 /** Small, stable hash → non-negative int. */

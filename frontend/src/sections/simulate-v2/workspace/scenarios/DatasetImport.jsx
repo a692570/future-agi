@@ -9,7 +9,7 @@ import { DATASETS, MIN_DATASET_ROWS, datasetRows } from "../../_mock/datasets";
 import { scenariosFromDataset } from "../../_mock/scenarios";
 import { SectionCard, EmptyState } from "../../components/primitives";
 import { ThinkingBar } from "../../components/loading";
-import { ScenarioRow } from "../ScenariosStep";
+import ScenarioRow from "./ScenarioRow";
 
 /**
  * Import scenarios from a dataset.

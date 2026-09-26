@@ -57,7 +57,7 @@ const TABS = [
   { id: "overview",  label: "Overview",         needs: null },
   { id: "world",     label: "World",            needs: "understand" },
   { id: "contract",  label: "Contract",         needs: "understand" },
-  { id: "scenarios", label: "Scenarios",        needs: "scenarios", badge: "scenarios" },
+  { id: "scenarios", label: "Scenarios",        needs: "build",     badge: "scenarios" },
   { id: "evals",     label: "Evaluations",      needs: null,        badge: "evals" },
   { id: "settings",  label: "Settings",         needs: null },
 ];
@@ -86,9 +86,20 @@ function firstReadyTab(done) {
   return t?.id || "overview";
 }
 
+/*
+  While the build runs, the panel follows whatever it is producing right now:
+  the contract once the agent has been read, the scenarios once they start
+  being written. Once the user picks a tab, it stays theirs.
+*/
+function liveTab(done) {
+  if (done.includes("build")) return "scenarios";
+  if (done.includes("understand")) return "contract";
+  return firstReadyTab(done);
+}
+
 export default function DerivedPanels({
   env, envState, patch, source, done, running, onBuilderTurn, onTabChange,
-  onBuilderPrompt, onStartRun,
+  onBuilderPrompt, onStartRun, scenarioProgress,
 }) {
   const [tab, setTab] = useState(() => firstReadyTab(done));
   const [touched, setTouched] = useState(false);
@@ -105,21 +116,24 @@ export default function DerivedPanels({
   }, [tab]);
 
   /*
-    Derivation is complete when the builder reaches the "scenarios" stage. We
-    also wait for the store to have caught up (envState + patch) — the panels
-    read from the store and rendering them a frame early meant the tabs looked
-    empty even after derivation finished. Only when both are true do we swap
-    from the illustrated loading state to the real editable panels.
+    The panels open as soon as there is something real to show — the contract
+    and world once the agent has been read — instead of waiting behind the
+    illustration for the whole build. Each tab unlocks when the stage it
+    depends on finishes; Scenarios fills row by row while they are written.
+    We also wait for the store to have caught up (envState + patch) — the
+    panels read from the store, and rendering them a frame early made them
+    look empty.
   */
-  const derivationDone = done.includes("scenarios");
+  const readDone = done.includes("understand");
   const primed = !!envState && !!patch;
-  const isLoading = !derivationDone || !primed;
+  const isLoading = !readDone || !primed;
+  const ready = (t) => !t.needs || done.includes(t.needs);
 
   /* Follow the derivation until the user picks something. */
   useEffect(() => {
     if (touched) return;
     if (isLoading) return;
-    setTab(firstReadyTab(done));
+    setTab(liveTab(done));
   }, [done, touched, isLoading]);
 
   /* If the currently-selected tab has been removed from TABS (e.g.
@@ -133,7 +147,7 @@ export default function DerivedPanels({
     }
   }, [tab, done]);
 
-  const current = TABS.find((t) => t.id === tab) || TABS[0];
+  const current = TABS.find((t) => t.id === tab && ready(t)) || TABS[0];
 
   /*
     All in-panel CTAs (RlContractPanel, PersonasPanel, ActorsPanel,
@@ -143,7 +157,8 @@ export default function DerivedPanels({
     nothing. Wire it to the tab setter that already exists.
   */
   const go = (tabId) => {
-    if (!TABS.some((tt) => tt.id === tabId)) return;
+    const target = TABS.find((tt) => tt.id === tabId);
+    if (!target || !ready(target)) return;
     setTab(tabId);
     setTouched(true);
   };
@@ -171,7 +186,7 @@ export default function DerivedPanels({
         }}
       >
         <CustomTabs
-          value={tab}
+          value={current.id}
           onChange={(_, v) => { setTab(v); setTouched(true); }}
           variant="scrollable"
           scrollButtons={false}
@@ -199,7 +214,10 @@ export default function DerivedPanels({
                  mid-build (scenarios are being generated *right now*)
                  so surfacing them reads as if the env is done. Badges
                  come back once running settles to false. */
-              const count = (primed && !running) ? badgeCountFor(t.badge, env, envState) : null;
+              /* Scenarios is the exception: its count is the progress of the
+                 stage writing them, so it ticks up live. */
+              const count = primed && (!running || t.badge === "scenarios") ? badgeCountFor(t.badge, env, envState) : null;
+              const locked = !ready(t);
               const gapItems = gapsByTab[t.id];
               const tabLabel = (
                 <Stack direction="row" alignItems="center" spacing={0.75}>
@@ -239,6 +257,7 @@ export default function DerivedPanels({
                 <Tab
                   key={t.id}
                   value={t.id}
+                  disabled={locked}
                   sx={{ minHeight: 42 }}
                   label={gapItems?.length > 0 ? (
                     <Tooltip
@@ -291,7 +310,10 @@ export default function DerivedPanels({
           </>
         ) : (
           <>
-            {isEditable(current.id) && <EditableHint />}
+            {current.id === "scenarios" && scenarioProgress?.streaming && (
+              <ScenarioStreamStrip progress={scenarioProgress} />
+            )}
+            {isEditable(current.id) && !scenarioProgress?.streaming && <EditableHint />}
             {rendered}
           </>
         )}
@@ -314,7 +336,33 @@ DerivedPanels.propTypes = {
   onTabChange: PropTypes.func,
   onBuilderPrompt: PropTypes.func,
   onStartRun: PropTypes.func,
+  scenarioProgress: PropTypes.object,
 };
+
+/*
+  "How many are we writing, and how far along are we" — the count the builder
+  committed to, and the rows landing in the table below as they are proved.
+*/
+function ScenarioStreamStrip({ progress }) {
+  const { shown = 0, total = 0 } = progress || {};
+  const pct = total ? Math.round((shown / total) * 100) : 0;
+  return (
+    <Box sx={{ pt: 2, pb: 0.5 }}>
+      <Stack direction="row" alignItems="baseline" spacing={1}>
+        <Typography sx={{ typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+          {`Writing scenarios · ${shown} of ${total}`}
+        </Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          Each one is checked ready, solvable and not vacuous before it is kept.
+        </Typography>
+      </Stack>
+      <Box sx={{ mt: 1, height: 3, borderRadius: 2, bgcolor: "divider", overflow: "hidden" }}>
+        <Box sx={{ width: `${pct}%`, height: "100%", bgcolor: "text.disabled", transition: "width 0.3s ease" }} />
+      </Box>
+    </Box>
+  );
+}
+ScenarioStreamStrip.propTypes = { progress: PropTypes.object };
 
 /* Which panels are meaningful to edit before a run. */
 function isEditable(id) {
@@ -359,7 +407,7 @@ function EditableHint() {
     <Stack
       direction="row" alignItems="center" spacing={1}
       sx={{
-        px: 2.5, py: 1.25, borderBottom: "1px solid", borderColor: "divider",
+        px: 1, py: 1.25, borderBottom: "1px solid", borderColor: "divider",
         flexShrink: 0,
       }}
     >

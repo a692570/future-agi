@@ -240,6 +240,26 @@ if (CURRENT_ENVIRONMENT !== "local" && "serviceWorker" in navigator) {
   });
 }
 
+// Local development only — keep hot updates reliable.
+//   1. A service worker left behind on this origin (by a build that ran on
+//      the same port with a non-local env) keeps serving its cached files,
+//      so edits only showed after a hard refresh. Remove any in dev.
+//   2. If a hot update fails part-way (e.g. a file saved mid-edit), Vite
+//      can't recover in place; reload on the next good update instead of
+//      leaving the page on stale code.
+if (import.meta.hot) {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((regs) => regs.forEach((r) => r.unregister()))
+      .catch(() => {});
+  }
+  let updateFailed = false;
+  import.meta.hot.on("vite:error", () => { updateFailed = true; });
+  import.meta.hot.on("vite:afterUpdate", () => {
+    if (updateFailed) window.location.reload();
+  });
+}
+
 // ----------------------------------------------------------------------
 
 const root = ReactDOM.createRoot(document.getElementById("root"));

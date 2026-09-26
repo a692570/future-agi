@@ -21,12 +21,15 @@ import { Drawer } from "@mui/material";
  * above the theme rule so the paper itself is `background.paper`, and the
  * theme's side borders and the reference drawer's shadow are kept.
  */
-export default function SideDrawer({ open, onClose, width = 480, keepMounted = false, children }) {
+export default function SideDrawer({ open, onClose, width = 480, keepMounted = false, persistent = false, children }) {
   return (
     <Drawer
       anchor="right"
       open={open}
       onClose={onClose}
+      /* `persistent` keeps the page behind usable while the drawer is open —
+         a panel you work alongside (a history), not a dialog. */
+      variant={persistent ? "persistent" : "temporary"}
       sx={{
         "&& .MuiDrawer-paper": {
           width,
@@ -55,5 +58,6 @@ SideDrawer.propTypes = {
   onClose: PropTypes.func,
   width: PropTypes.oneOfType([PropTypes.number, PropTypes.string, PropTypes.object]),
   keepMounted: PropTypes.bool,
+  persistent: PropTypes.bool,
   children: PropTypes.node,
 };

@@ -83,7 +83,10 @@ export default function NavVertical({ openNav, onCloseNav }) {
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        borderRight: (theme) => `solid 1px ${theme.palette.border.light}`,
+        /* `border.light` only exists in the light palette — in dark it was
+           undefined, which dropped the whole border. Fall back to the
+           divider so the nav keeps its edge in both themes. */
+        borderRight: (theme) => `solid 1px ${theme.palette.border?.light || theme.palette.divider}`,
       }}
     >
       {/* Fixed Header */}

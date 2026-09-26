@@ -7,7 +7,7 @@ import { generatedPool, derivedFindings } from "../../_mock/scenarios";
 import { getAgentType } from "../../_mock/agentTypes";
 import { SectionCard, cardGrid } from "../../components/primitives";
 import { BootSequence } from "../../components/loading";
-import { ScenarioRow } from "../ScenariosStep";
+import ScenarioRow from "./ScenarioRow";
 
 const ANALYSIS_STEPS = [
   "Reading the agent's system prompt",

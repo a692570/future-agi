@@ -33,6 +33,9 @@ import { provenanceFor } from "../_mock/provenance";
 import { OriginChip, SectionCard, EmptyState } from "../components/primitives";
 import CapabilityGraph from "./CapabilityGraph";
 import ToolFitBanner from "./ToolFitBanner";
+import AgentPromptDrawer from "./agents/AgentPromptDrawer";
+import { agentPromptOf } from "../_mock/agentPrompt";
+import { agentToolsFor } from "../_mock/toolFit";
 
 /**
  * What this environment is.
@@ -536,6 +539,12 @@ function AgentSummarySection({ env, envState, onGo, onManageVersions, agentConne
   const hosted = Boolean(agent?.typeId && HOSTED_TYPE_IDS.has(agent.typeId));
   const { enqueueSnackbar } = useSnackbar();
   const [syncing, setSyncing] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  /* The active version's own prompt when it carries one; otherwise the one
+     its source would hold, read against the tools that version calls. */
+  const activeVersion = versions.find((v) => v.label === activeLabel);
+  const prompt = activeVersion?.prompt
+    || (agent ? agentPromptOf(env?.builtFrom || { kind: agent.sourceKind, value: agent.location }, { ...env, tools: agentToolsFor(env, envState, activeLabel) }) : null);
   const handleSync = () => {
     if (syncing) return;
     setSyncing(true);
@@ -618,6 +627,20 @@ function AgentSummarySection({ env, envState, onGo, onManageVersions, agentConne
               </span>
             </Tooltip>
           )}
+          {agent && !locked && (
+            <Button
+              variant="outlined" size="small"
+              onClick={() => setPromptOpen(true)}
+              startIcon={<Iconify icon="solar:document-text-linear" width={15} />}
+              sx={{
+                typography: "s2", fontWeight: 700,
+                color: "text.primary", borderColor: "divider",
+                "&:hover": { borderColor: "text.subtitle", bgcolor: "action.hover" },
+              }}
+            >
+              View prompt
+            </Button>
+          )}
           {locked ? null : (
             <Button
               variant="contained" size="small"
@@ -633,6 +656,7 @@ function AgentSummarySection({ env, envState, onGo, onManageVersions, agentConne
           )}
         </Stack>
       </Stack>
+      <AgentPromptDrawer open={promptOpen} onClose={() => setPromptOpen(false)} label={activeLabel} prompt={prompt} />
     </Box>
   );
 }
@@ -1731,6 +1755,7 @@ function SourceToSandboxMap({ env, envState, patch }) {
   };
 
   const toolResolutions = envState?.toolResolutions || {};
+  const setToolResolution = (name, choice) => patch?.({ toolResolutions: { ...toolResolutions, [name]: choice } });
 
   /*
     Every tool renders with an effect classification — verb heuristic

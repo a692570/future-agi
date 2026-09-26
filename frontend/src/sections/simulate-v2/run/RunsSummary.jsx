@@ -20,6 +20,11 @@ import { allMetrics, deltaAgainst } from "../_mock/winner";
 import { useEnvState } from "../store";
 import { neutralCheckboxSx } from "../components/primitives";
 
+/* How many evals the chart legend names before folding the rest into "+N more". */
+const LEGEND_MAX = 4;
+/* With more evals than the legend holds, how many the chart starts with. */
+const DEFAULT_SHOWN = 3;
+
 /* Timestamp for a run row. Falls back to startedAt and never prints
    "Invalid Date" for an in-progress run that has no finishedAt yet. */
 const runTimeLabel = (r) => {
@@ -61,6 +66,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     render would lock the chart to an empty set.
   */
   const [shownEvalIds, setShownEvalIds] = useState(null);
+  /* The eval picker is opened from the legend's "+N more" as well as from
+     its own control, so its open state lives here. */
+  const [evalPickerOpen, setEvalPickerOpen] = useState(false);
 
   /* The winner is kept with the environment rather than derived, because it is
      a decision someone made under stated weights — not a fact about the runs
@@ -207,10 +215,28 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
 
   /* Four graders on one axis is already a lot; eight would be a scribble. The
      chart draws the ones asked for, and the table keeps all of them — the
-     question "how is this moving" is narrower than "what are the numbers". */
+     question "how is this moving" is narrower than "what are the numbers".
+     With more than a handful, it starts on the few that need a look — the
+     lowest-scoring in the latest run (the first few before anything has
+     scored) — and the picker adds the rest. */
+  const defaultShownIds = useMemo(() => {
+    if (evals.length <= LEGEND_MAX) return evals.map((e) => e.id);
+    const latest = (id) => {
+      const data = series.find((x) => x.id === id)?.data || [];
+      for (let i = data.length - 1; i >= 0; i -= 1) if (data[i] != null) return data[i];
+      return null;
+    };
+    const scored = evals.filter((e) => latest(e.id) != null);
+    const picked = scored.length
+      ? [...scored].sort((a, b) => latest(a.id) - latest(b.id)).slice(0, DEFAULT_SHOWN)
+      : evals.slice(0, DEFAULT_SHOWN);
+    const ids = new Set(picked.map((e) => e.id));
+    /* Keep the evals' own order so colours and the picker line up. */
+    return evals.filter((e) => ids.has(e.id)).map((e) => e.id);
+  }, [evals, series]);
   const shown = useMemo(
-    () => (shownEvalIds ? evals.filter((e) => shownEvalIds.includes(e.id)) : evals),
-    [evals, shownEvalIds],
+    () => evals.filter((e) => (shownEvalIds || defaultShownIds).includes(e.id)),
+    [evals, shownEvalIds, defaultShownIds],
   );
   const shownSeries = useMemo(
     () => series.filter((x) => shown.some((e) => e.id === x.id)),
@@ -430,12 +456,15 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
             }}
             SelectProps={{
               multiple: true,
+              open: evalPickerOpen,
+              onOpen: () => setEvalPickerOpen(true),
+              onClose: () => setEvalPickerOpen(false),
               /* Summarised, not listed: four names are already wider than the
                  control and seven are a paragraph. */
               renderValue: (ids) => {
                 if (ids.length === evals.length) return `All ${evals.length} evals`;
-                const names = evals.filter((x) => ids.includes(x.id)).map((x) => x.name);
-                return names.length > 2 ? `${names[0]} +${names.length - 1} more` : names.join(", ");
+                if (ids.length === 1) return evals.find((x) => x.id === ids[0])?.name || "1 eval";
+                return `${ids.length} of ${evals.length} evals`;
               },
               MenuProps: { PaperProps: { sx: { maxHeight: 320 } } },
             }}
@@ -464,18 +493,50 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
             })}
           </TextField>
 
-          {/* Wraps within its own half of the row instead of pushing anything. */}
-          <Stack
-            direction="row" spacing={1.5} flexWrap="wrap" rowGap={0.75}
-            sx={{ flex: 1, minWidth: 0, justifyContent: "flex-end" }}
-          >
-            {shown.map((e) => (
-              <Stack key={e.id} direction="row" alignItems="center" spacing={0.625}>
-                <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: e.color, flexShrink: 0 }} />
-                <Typography noWrap sx={{ typography: "s3", color: "text.secondary" }}>{e.name}</Typography>
+          {/*
+            One line, always. With a handful of evals the legend lists them
+            all; past that it lists the first few and folds the rest into
+            "+N more", which opens the picker beside it — the picker already
+            carries every eval with its colour, so nothing is lost. Ten
+            names wrapping into three lines over a 160px chart was the
+            legend outgrowing the chart it labels.
+          */}
+          {(() => {
+            const room = shown.length > LEGEND_MAX ? LEGEND_MAX - 1 : shown.length;
+            const listed = shown.slice(0, room);
+            const rest = shown.length - listed.length;
+            return (
+              <Stack
+                direction="row" alignItems="center" spacing={1.5}
+                sx={{ flex: 1, minWidth: 0, justifyContent: "flex-end", overflow: "hidden" }}
+              >
+                {listed.map((e) => (
+                  <Tooltip key={e.id} arrow title={e.name}>
+                    <Stack direction="row" alignItems="center" spacing={0.625} sx={{ minWidth: 0 }}>
+                      <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: e.color, flexShrink: 0 }} />
+                      <Typography noWrap sx={{ typography: "s3", color: "text.secondary", maxWidth: 170 }}>{e.name}</Typography>
+                    </Stack>
+                  </Tooltip>
+                ))}
+                {rest > 0 && (
+                  <Tooltip arrow title={shown.slice(room).map((e) => e.name).join(", ")}>
+                    <Typography
+                      component="button"
+                      onClick={() => setEvalPickerOpen(true)}
+                      sx={{
+                        typography: "s3", fontWeight: 700, color: "text.primary", flexShrink: 0,
+                        border: "1px solid", borderColor: "divider", borderRadius: 0.75,
+                        bgcolor: "transparent", px: 0.75, py: 0.125, cursor: "pointer",
+                        "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
+                      }}
+                    >
+                      {`+${rest} more`}
+                    </Typography>
+                  </Tooltip>
+                )}
               </Stack>
-            ))}
-          </Stack>
+            );
+          })()}
         </Stack>
 
         <Box sx={{ px: 0, pt: 0.5, pb: 0.5, width: "100%" }}>

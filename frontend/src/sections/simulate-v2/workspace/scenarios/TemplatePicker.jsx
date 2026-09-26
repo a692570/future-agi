@@ -6,7 +6,7 @@ import { getPacks, getRows } from "../../_mock/scenarios";
 import { DIFFICULTY_COLOR } from "../../_mock/environments";
 import { SectionCard } from "../../components/primitives";
 import { RowSkeleton } from "../../components/loading";
-import { ScenarioRow } from "../ScenariosStep";
+import ScenarioRow from "./ScenarioRow";
 
 /**
  * Scenario packs for this environment.

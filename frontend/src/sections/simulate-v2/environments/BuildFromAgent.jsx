@@ -22,7 +22,10 @@ import {
 } from "../_mock/builder";
 import { ADAPTERS } from "../_mock/rlContract";
 import { generatedPool } from "../_mock/scenarios";
-import { stampProvenance as provStamp, defaultBatchId as provDefaultBatchId } from "../_mock/scenarioProvenance";
+import { agentPromptOf } from "../_mock/agentPrompt";
+import AgentPromptDrawer from "../workspace/agents/AgentPromptDrawer";
+import { stampProvenance as provStamp, defaultBatchId as provDefaultBatchId, currentUser } from "../_mock/scenarioProvenance";
+import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
 import { parseCurl, describeFill } from "../_mock/curl";
 import { detectEndpoints, CONFIDENCE } from "../_mock/endpoints";
 import AssistantConsole from "../assistant/AssistantConsole";
@@ -116,13 +119,33 @@ export default function BuildFromAgent() {
   const env = useMemo(() => (source ? derivedEnvironment(source, { id: buildId }) : null), [source, buildId]);
   /* Depth is a property of generation, so changing it regenerates the pool
      rather than just relabelling the environment. */
-  const scenarios = useMemo(
+  const buildDone = done.includes("build");
+  const scenariosDone = done.includes("scenarios");
+  /* Everything the build writes is one batch — the environment's first —
+     added by whoever ran the build, at the moment it ran. Scenarios added
+     afterwards arrive as batches of their own. */
+  const [builtAt] = useState(() => new Date().toISOString());
+  const pool = useMemo(
     // No cap unless the connect form asked for a count; then exactly that many.
-    () => (env && done.includes("scenarios")
+    () => (env && buildDone
       ? sizeToCount(generatedPool({ ...env, difficulty }), source?.scenarioCount)
+        .map((r) => provStamp(r, { source: "derived", actor: currentUser(), at: builtAt, batchId: `batch_build_${buildId}` }))
       : []),
-    [env, done, difficulty, source?.scenarioCount],
+    [env, buildDone, difficulty, source?.scenarioCount, builtAt, buildId],
   );
+  /* Scenarios land one at a time while the stage writes them, so the
+     Scenarios tab fills as they are proved rather than all at once at the
+     end. `revealed` counts how many have been written so far. */
+  const [revealed, setRevealed] = useState(0);
+  const scenarios = useMemo(
+    () => (scenariosDone ? pool : pool.slice(0, revealed)),
+    [pool, revealed, scenariosDone],
+  );
+  const scenarioProgress = {
+    shown: scenarios.length,
+    total: pool.length,
+    streaming: buildDone && !scenariosDone,
+  };
 
   useEffect(() => {
     if (!env) return;
@@ -159,7 +182,7 @@ export default function BuildFromAgent() {
   */
   const STAGE_ORDER = ["understand", "build", "scenarios"];
 
-  const play = (title, steps, nextChips, stageId) => {
+  const play = (title, steps, nextChips, stageId, pace = 380) => {
     setRunning(true);
     setChips([]);
     const id = `t-${Date.now()}`;
@@ -179,7 +202,7 @@ export default function BuildFromAgent() {
         } else {
           setChips(asideChips(nextChips));
         }
-      }, 380 * (i + 1)));
+      }, pace * (i + 1)));
     });
   };
 
@@ -296,7 +319,19 @@ export default function BuildFromAgent() {
       ? sizeToCount(generatedPool({ ...env, difficulty }), source?.scenarioCount).length
       : undefined;
     const stage = builderRun(id, { ...source, draftCount });
-    play(stage.title, stage.steps, stage.chips, id);
+    /* Writing scenarios is the stage people wait on, so it runs slower and
+       drops each scenario into the table as it is written — spread across
+       the stage, finishing on its last step. */
+    const pace = id === "scenarios" ? 650 : 380;
+    if (id === "scenarios" && draftCount) {
+      setRevealed(0);
+      const from = pace;
+      const span = pace * (stage.steps.length - 1) - from;
+      for (let k = 1; k <= draftCount; k += 1) {
+        timers.current.push(setTimeout(() => setRevealed(k), from + (span * k) / draftCount));
+      }
+    }
+    play(stage.title, stage.steps, stage.chips, id, pace);
   };
 
   /*
@@ -332,26 +367,16 @@ export default function BuildFromAgent() {
       setTurns((prev) => [...prev, {
         id: `a-${Date.now()}`,
         role: "assistant",
-        steps: [{ kind: "note", text: fresh.length > 0
-          ? `Added ${fresh.length} scenarios as a new batch on the Scenarios tab.`
-          : "This environment has already used every derived scenario in the pool — delete a few first, or connect a fresh source." }],
+        steps: [{ kind: "note", text: fresh.length === 0
+          ? "This environment has already used every derived scenario in the pool — delete a few first, or connect a fresh source."
+          : fresh.length < intent.count
+            ? `Added ${fresh.length} scenarios as a new batch — the derivation pool only had ${fresh.length} unused left.`
+            : `Added ${fresh.length} scenarios as a new batch on the Scenarios tab.` }],
       }]);
       return;
     }
     const reply = builderRun("ask", source, text);
     play(null, reply.steps, asideChips(reply.chips.length ? reply.chips : chips), null);
-  };
-
-  const detectAddScenariosIntent = (t) => {
-    const s = (t || "").toLowerCase();
-    const isAdd = /(^|\s)(add|generate|create|make|give me|write|produce)\s+/.test(s)
-      && /scenar/.test(s)
-      && !/where\s+the/.test(s);
-    if (!isAdd) return null;
-    const num = s.match(/\b(\d{1,3})\b/);
-    const wordCount = /a few|some|another|couple/.test(s) ? 5 : null;
-    const count = num ? Math.min(50, parseInt(num[1], 10)) : (wordCount || 8);
-    return { count };
   };
 
   /*
@@ -470,6 +495,7 @@ export default function BuildFromAgent() {
   */
   const adoptedRef = useRef(null);
   const readyStampedRef = useRef(false);
+  const syncedScenariosRef = useRef(0);
   /*
     The derived env has a stable id (`env-returns-line`), so a previous
     session's envState — including anything the user added under
@@ -520,6 +546,9 @@ export default function BuildFromAgent() {
             id: "agent-v1", label: "v1", note: "The version this environment was built from.",
             reach: source?.kind === "platform" ? "platform" : "endpoint", createdAt: now, tools: v1Tools,
             values: agent.values, via: agent.via, connectedAt: now,
+            /* The prompt the build was read from — viewable from the build
+               screen and from the test subject afterwards. */
+            prompt: agentPromptOf(source, env),
           },
         ],
         activeAgentVersion: "v1",
@@ -568,7 +597,11 @@ export default function BuildFromAgent() {
     /* envState catches up regardless of adoption — the panels on this screen
        read from it while the user reviews. */
     const nextPatch = {};
-    if (scenarios?.length && (envState.scenarios?.length || 0) !== scenarios.length) {
+    /* Sync what the stage has written so far — keyed on what was last
+       written, not on the store, so a scenario the user adds or removes
+       afterwards is not overwritten by the generated list. */
+    if (scenarios?.length && syncedScenariosRef.current !== scenarios.length) {
+      syncedScenariosRef.current = scenarios.length;
       nextPatch.scenarios = scenarios;
     }
     if (evalIds?.length && (envState.evals?.length || 0) !== evalIds.length) {
@@ -595,6 +628,8 @@ export default function BuildFromAgent() {
     setSource(null);
     setTurns([]);
     setDone([]);
+    setRevealed(0);
+    syncedScenariosRef.current = 0;
     setChips([]);
     setRunning(false);
     setIntake(null);
@@ -611,6 +646,8 @@ export default function BuildFromAgent() {
         patch={envPatch}
         done={done}
         scenarioCount={scenarios?.length || 0}
+        scenarioProgress={scenarioProgress}
+        agentPrompt={source && env ? agentPromptOf(source, env) : null}
         name={name} setName={setName}
         editingName={editingName} setEditingName={setEditingName}
         onRun={runNow}
@@ -618,7 +655,9 @@ export default function BuildFromAgent() {
         blockedReason={runBlockedReason}
       />
 
-      <Box sx={{ flex: 1, minHeight: 0, overflow: source ? "hidden" : "auto", p: 2 }}>
+      {/* The build view runs edge to edge — chat and environment split by one
+          rule — so it drops the padding the picker and intake steps use. */}
+      <Box sx={{ flex: 1, minHeight: 0, overflow: source ? "hidden" : "auto", p: source && (intake || presetSource) && !awaitReadAck ? 0 : 2 }}>
         {!source ? (
           <SourcePicker
             kind={kind} setKind={setKind}
@@ -677,6 +716,7 @@ export default function BuildFromAgent() {
             onSend={onSend} onChip={onChip} done={done} source={source}
             env={env} envState={envState} patch={envPatch}
             scenarios={scenarios}
+            scenarioProgress={scenarioProgress}
             evalIds={evalIds} onAddEvals={() => setAddingEvals(true)}
             onBuilderTurn={runBuilderTurn}
             onRun={runNow}
@@ -780,9 +820,11 @@ function buildQuestions(env) {
 
 function Header({
   onBack, backLabel, source, env, envState, patch, done, running, scenarioCount,
+  scenarioProgress, agentPrompt,
   name, setName, editingName, setEditingName,
   onRun, canGo, blockedReason,
 }) {
+  const [promptOpen, setPromptOpen] = useState(false);
   /* Hide the header's Run simulation when the Scenarios toolbar has
      transformed into the SelectionBar — its "Run N selected" is
      the primary in that state, and keeping the header CTA visible
@@ -923,8 +965,10 @@ function Header({
                         },
                       }}
                     />
-                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#CA8A04" }}>
-                      Building
+                    <Typography sx={{ typography: "s2", fontWeight: 700, color: "#CA8A04", fontVariantNumeric: "tabular-nums" }}>
+                      {scenarioProgress?.streaming && scenarioProgress.total
+                        ? `Writing scenarios · ${scenarioProgress.shown} of ${scenarioProgress.total}`
+                        : "Building"}
                     </Typography>
                   </Stack>
                 );
@@ -986,9 +1030,22 @@ function Header({
               );
                   })()}
                 </Box>
+                {/* The prompt the build is reading — open while it builds and
+                    after, so what was derived can be checked against it. */}
+                {agentPrompt && (
+                  <Button
+                    size="small"
+                    onClick={() => setPromptOpen(true)}
+                    startIcon={<Iconify icon="solar:document-text-linear" width={15} />}
+                    sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", flexShrink: 0, px: 1 }}
+                  >
+                    Agent v1 prompt
+                  </Button>
+                )}
               </>
             )}
           </Stack>
+          <AgentPromptDrawer open={promptOpen} onClose={() => setPromptOpen(false)} label="v1" prompt={agentPrompt} />
 
           {/* Spacer pushes the Run-simulation button to the far right;
               status chip now lives in the identity cluster on the left. */}
@@ -1055,6 +1112,7 @@ RunButton.propTypes = {
 Header.propTypes = {
   onBack: PropTypes.func, backLabel: PropTypes.string,
   source: PropTypes.object, env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, scenarioCount: PropTypes.number, done: PropTypes.array, running: PropTypes.bool,
+  scenarioProgress: PropTypes.object, agentPrompt: PropTypes.object,
   name: PropTypes.string, setName: PropTypes.func,
   editingName: PropTypes.bool, setEditingName: PropTypes.func,
   onRun: PropTypes.func, canGo: PropTypes.bool, blockedReason: PropTypes.string,
@@ -2123,12 +2181,12 @@ const difficultyForDepth = (d) => (d === "focused" ? "Basic" : d === "comprehens
 
 function Deriving({
   turns, running, chips, onSend, onChip, done, source, env, envState, patch, scenarios,
-  evalIds, onAddEvals, onBuilderTurn, onRun,
+  scenarioProgress, evalIds, onAddEvals, onBuilderTurn, onRun,
 }) {
   return (
     <Box
       sx={{
-        display: "grid", gap: 2, height: "100%", minHeight: 0,
+        display: "grid", height: "100%", minHeight: 0,
         /*
           Chat narrow, artifacts wide — the shape Lovable, Figma Make and v0
           all landed on for the same reason: the input is a column of text and
@@ -2139,7 +2197,17 @@ function Deriving({
         gridTemplateColumns: { xs: "1fr", lg: "minmax(360px, 400px) 1fr" },
       }}
     >
-      <SectionCard sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* One surface, split by a single rule — no card around either side. */}
+      <Box
+        sx={{
+          height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden",
+          /* Widths and colour set separately: a responsive "1px solid"
+             shorthand resets the colour to the text colour, which drew this
+             rule bright white instead of the divider grey. */
+          borderStyle: "solid", borderWidth: 0, borderColor: "divider",
+          borderRightWidth: { xs: 0, lg: 1 }, borderBottomWidth: { xs: 1, lg: 0 },
+        }}
+      >
         <AssistantConsole
           turns={turns}
           running={running}
@@ -2149,9 +2217,9 @@ function Deriving({
           frozen={env?.buildStatus === "building"}
           frozenReason="Environment is still being built"
         />
-      </SectionCard>
+      </Box>
 
-      <SectionCard sx={{ minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", px: 2.5 }}>
+      <Box sx={{ minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", px: 2 }}>
         <PanelBoundary>
         <DerivedPanels
           env={env}
@@ -2161,6 +2229,7 @@ function Deriving({
           done={done}
           running={running}
           scenarios={scenarios}
+          scenarioProgress={scenarioProgress}
           evalIds={evalIds}
           onAddEvals={onAddEvals}
           onBuilderTurn={onBuilderTurn}
@@ -2168,7 +2237,7 @@ function Deriving({
           onStartRun={onRun}
         />
         </PanelBoundary>
-      </SectionCard>
+      </Box>
     </Box>
   );
 }
@@ -2229,6 +2298,7 @@ Deriving.propTypes = {
   source: PropTypes.object, env: PropTypes.object,
   envState: PropTypes.object, patch: PropTypes.func,
   scenarios: PropTypes.array,
+  scenarioProgress: PropTypes.object,
   evalIds: PropTypes.array, onAddEvals: PropTypes.func,
   onBuilderTurn: PropTypes.func,
   onRun: PropTypes.func,

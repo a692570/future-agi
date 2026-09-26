@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { Fragment, useContext, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
@@ -7,8 +7,6 @@ import {
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { subTasksFor } from "../../_mock/contract";
-import { ProvenanceGlyph } from "../ScenariosStep";
-import { sourceOf, relativeTime } from "../../_mock/scenarioProvenance";
 import { admissionOf } from "../../_mock/coverage";
 import { versionNumber } from "../../_mock/versions";
 import { ScenarioRowContext } from "./scenarioRowContext";
@@ -111,7 +109,7 @@ ToolChips.propTypes = {
 };
 
 export default function ScenarioTable({
-  rows, groups, env, envVersion, onEdit, onRemove, onHideGroup, selectedIds, onSelectionChange, locked = false,
+  rows, groups, env, envVersion, onEdit, onRemove, selectedIds, onSelectionChange, locked = false,
 }) {
   const { statusOf, toolsOf, answers, agentCalls, agentLabel } = useContext(ScenarioRowContext);
   /*
@@ -214,8 +212,60 @@ export default function ScenarioTable({
   ];
   let counter = 0;
 
+  /*
+    The table is wider than most panes, so it scrolls sideways. Two things
+    keep that readable: the identity columns (select, #, Scenario) and the
+    actions stay pinned, and an edge shadow appears only where something is
+    actually scrolled out of view behind a pinned column.
+  */
+  const scrollRef = useRef(null);
+  const [edge, setEdge] = useState({ left: false, right: false, width: 0 });
+  const measure = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const next = {
+      left: el.scrollLeft > 1,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+      width: el.clientWidth,
+    };
+    setEdge((prev) => (
+      prev.left === next.left && prev.right === next.right && prev.width === next.width ? prev : next
+    ));
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => { ro.disconnect(); el.removeEventListener("scroll", measure); };
+  }, [measure]);
+
+  const edgeShadow = (dir, on) => ({
+    transition: "box-shadow 150ms",
+    boxShadow: (t) => (on
+      ? `${dir === "right" ? 8 : -8}px 0 12px -6px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.55 : 0.1)}`
+      : "none"),
+  });
+  /* Pinned-left cells: opaque so columns slide under them, with the same
+     hover tint as the rest of the row. The last one carries the shadow. */
+  const pin = (i, head) => ({
+    position: "sticky", left: PIN_LEFT[i], zIndex: head ? 3 : 1,
+    bgcolor: "background.paper",
+    boxSizing: "border-box", width: PIN_W[i], minWidth: PIN_W[i], maxWidth: PIN_W[i],
+    ...(!head && {
+      ".MuiTableRow-hover:hover &": {
+        backgroundImage: (t) => `linear-gradient(${t.palette.action.hover}, ${t.palette.action.hover})`,
+      },
+    }),
+    ...(i === PIN_W.length - 1 && edgeShadow("right", edge.left)),
+  });
+
+
   return (
-    <Box sx={{ overflowX: "auto" }}>
+    <Box ref={scrollRef} sx={{ overflowX: "auto" }}>
       <Table size="small" sx={{ minWidth: 1640 }}>
         <TableHead>
           <TableRow>
@@ -230,6 +280,7 @@ export default function ScenarioTable({
               */
               const isActions = i === columns.length - 1;
               const isSelect = h === "select";
+              const pinned = i < PIN_W.length;
               return (
                 <TableCell
                   key={h || i}
@@ -238,15 +289,16 @@ export default function ScenarioTable({
                   sx={{
                     typography: "s3", fontWeight: 700, color: "text.subtitle",
                     textTransform: "uppercase", letterSpacing: .4,
-                    bgcolor: "background.neutral",
+                    bgcolor: "background.paper",
                     borderBottom: "1px solid", borderColor: "divider",
                     whiteSpace: "nowrap",
-                    ...(h === "#" && { width: 44 }),
-                    ...(isSelect && { width: 44, pl: 1.5 }),
+                    ...(pinned && pin(i, true)),
+                    ...(isSelect && { pl: 1.5 }),
+                    ...(h === "#" && { px: 1 }),
                     ...(isActions && {
-                      position: "sticky", right: 0, zIndex: 2,
-                      width: 96, minWidth: 96,
-                      boxShadow: (t) => `-8px 0 12px -6px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.08)}`,
+                      position: "sticky", right: 0, zIndex: 3,
+                      width: ACTIONS_W, minWidth: ACTIONS_W,
+                      ...edgeShadow("left", edge.right),
                     }),
                   }}
                 >
@@ -282,7 +334,12 @@ export default function ScenarioTable({
                       py: 1, px: 2,
                     }}
                   >
-                    <Stack direction="row" alignItems="center" spacing={1.25}>
+                    {/* Pinned to the visible width, so the group's name and
+                        count stay in view while the columns scroll. */}
+                    <Stack
+                      direction="row" alignItems="center" spacing={1.25}
+                      sx={{ position: "sticky", left: 16, width: edge.width ? edge.width - 32 : "auto" }}
+                    >
                       <Iconify icon="solar:alt-arrow-down-linear" width={11} sx={{ color: "text.subtitle" }} />
                       <Typography sx={{ typography: "s2", fontWeight: 600, color: "text.primary", flex: 1, minWidth: 0, fontSize: 12.5 }}>
                         {section.label}
@@ -290,17 +347,6 @@ export default function ScenarioTable({
                       <Typography sx={{ typography: "s3", fontWeight: 600, color: "text.subtitle", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
                         {section.rows.length}
                       </Typography>
-                      {onHideGroup && (
-                        <Tooltip arrow title="Hide this group">
-                          <IconButton
-                            size="small"
-                            onClick={(e) => { e.stopPropagation(); onHideGroup(section.id); }}
-                            sx={{ p: 0.25, color: "text.subtitle", "&:hover": { color: "text.primary" } }}
-                          >
-                            <Iconify icon="solar:eye-closed-linear" width={12} />
-                          </IconButton>
-                        </Tooltip>
-                      )}
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -321,7 +367,7 @@ export default function ScenarioTable({
 
                 return (
                   <TableRow key={row.id} hover>
-                    <TableCell padding="checkbox" sx={{ pl: 1.5, verticalAlign: "top" }}>
+                    <TableCell padding="checkbox" sx={{ ...pin(0), pl: 1.5, verticalAlign: "top" }}>
                       <Checkbox
                         size="small"
                         checked={selected.has(row.id)}
@@ -330,14 +376,14 @@ export default function ScenarioTable({
                         sx={selectableCheckboxSx}
                       />
                     </TableCell>
-                    <TableCell sx={{ typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums", verticalAlign: "top" }}>
+                    <TableCell sx={{ ...pin(1), px: 1, typography: "s3", color: "text.subtitle", fontVariantNumeric: "tabular-nums", verticalAlign: "top" }}>
                       {idx}
                     </TableCell>
 
                 {/* SCENARIO — name (bold, truncated) + summary (subtle,
                     truncated). Both wrapped in tooltips so long values
                     are readable on hover. */}
-                <TableCell sx={{ maxWidth: 280, verticalAlign: "top" }}>
+                <TableCell sx={{ ...pin(2), verticalAlign: "top" }}>
                   <Stack direction="row" alignItems="center" spacing={0.75}>
                     <TruncTooltip title={row.name || row.title}>
                       <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.name || row.title}</Typography>
@@ -472,7 +518,7 @@ export default function ScenarioTable({
                   sx={{
                     whiteSpace: "nowrap", verticalAlign: "top",
                     position: "sticky", right: 0, zIndex: 1,
-                    width: 96, minWidth: 96,
+                    width: ACTIONS_W, minWidth: ACTIONS_W,
                     /*
                       Sticky cells need an opaque background to hide the
                       columns scrolling underneath. Layering the two on
@@ -482,8 +528,7 @@ export default function ScenarioTable({
                       mismatched patch on hover.
                     */
                     bgcolor: "background.paper",
-                    boxShadow: (t) => `-8px 0 12px -6px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.08)}`,
-                    transition: "background-image 120ms ease",
+                    ...edgeShadow("left", edge.right),
                     ".MuiTableRow-hover:hover &": {
                       backgroundImage: (t) => `linear-gradient(${t.palette.action.hover}, ${t.palette.action.hover})`,
                     },
@@ -527,6 +572,11 @@ ScenarioTable.propTypes = {
   onSelectionChange: PropTypes.func,
   locked: PropTypes.bool,
 };
+
+/* Pinned-left columns: select, #, Scenario — widths and offsets. */
+const PIN_W = [48, 48, 300];
+const PIN_LEFT = PIN_W.map((_, i) => PIN_W.slice(0, i).reduce((a, w) => a + w, 0));
+const ACTIONS_W = 96;
 
 /* ── readability helpers ──────────────────────────────────────────────────── */
 

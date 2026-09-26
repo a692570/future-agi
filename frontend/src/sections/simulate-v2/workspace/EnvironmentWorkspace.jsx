@@ -11,6 +11,7 @@ import { paths } from "src/routes/paths";
 import { protoRunId } from "../_mock/executionAdapter";
 import { generatedPool } from "../_mock/scenarios";
 import { stampProvenance, defaultBatchId } from "../_mock/scenarioProvenance";
+import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
 import { getEnvironment } from "../_mock/environments";
 import { getSurface } from "../_mock/surfaces";
 import { BOOT_STEPS } from "../_mock/runStream";
@@ -24,7 +25,7 @@ import { subscribeBuilderMode } from "../_mock/builderModeBus";
 import { currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
 import { withPinnedWorld, worldToolsFor } from "../_mock/toolFit";
 import { getAgentType } from "../_mock/agentTypes";
-import { SurfaceIcon, EmptyState, SectionCard } from "../components/primitives";
+import { SurfaceIcon, EmptyState } from "../components/primitives";
 import { ProvisioningPanel } from "../components/loading";
 import AssistantConsole from "../assistant/AssistantConsole";
 import OverviewPanel from "./OverviewPanel";
@@ -584,27 +585,6 @@ export default function EnvironmentWorkspace() {
     }, 900);
   };
 
-  /* Recognise a request to add scenarios. Returns { count } or null.
-     Kept intentionally lenient — the prototype only needs to notice
-     the intent, not disambiguate every phrasing. */
-  const detectAddScenariosIntent = (text) => {
-    const t = text.toLowerCase();
-    /* Add-intent verbs. `generate` and `create` are variations users
-       reach for; `write more` is common too. Explicitly excludes
-       "add scenario where…" (that's a specific edit, not a batch). */
-    const isAdd = /(^|\s)(add|generate|create|make|give me|write|produce)\s+/i.test(t)
-      && /scenar/i.test(t)
-      && !/where\s+the/i.test(t);
-    if (!isAdd) return null;
-    /* Try to pull an explicit count. Falls back to a demo-friendly
-       default when the user says "add more scenarios" without a
-       number. */
-    const num = t.match(/\b(\d{1,3})\b/);
-    const wordCount = /a few|some|another|couple/i.test(t) ? 5 : null;
-    const count = num ? Math.min(50, parseInt(num[1], 10)) : (wordCount || 8);
-    return { count };
-  };
-
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {/* ── environment header ── */}
@@ -941,15 +921,23 @@ export default function EnvironmentWorkspace() {
       {/* A run is a pairing — this environment version × that agent version. */}
       <VersionBar env={env} envState={envState} />
 
-      {/* ── body: builder console (left) + tabbed panels (right) —
-            unified with the build/review screen ── */}
+      {/* ── body: builder console (left) + tabbed panels (right) — one
+            surface split by a single rule, the same as the build screen ── */}
       <Box
         sx={{
-          flex: 1, minHeight: 0, display: "grid", gap: 2, p: 2,
+          flex: 1, minHeight: 0, display: "grid",
           gridTemplateColumns: { xs: "1fr", lg: "minmax(340px, 400px) 1fr" },
         }}
       >
-        <SectionCard sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <Box
+          sx={{
+            height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden",
+            /* Widths and colour set separately: a responsive "1px solid"
+               shorthand resets the colour to the text colour (bright white). */
+            borderStyle: "solid", borderWidth: 0, borderColor: "divider",
+            borderRightWidth: { xs: 0, lg: 1 }, borderBottomWidth: { xs: 1, lg: 0 },
+          }}
+        >
           <AssistantConsole
             turns={turns}
             running={chatRunning}
@@ -968,12 +956,11 @@ export default function EnvironmentWorkspace() {
               )
             }
           />
-        </SectionCard>
+        </Box>
 
         <Box
           sx={{
             height: "100%", minHeight: 0, display: "flex", flexDirection: "column",
-            border: "1px solid", borderColor: "divider", borderRadius: 1.5,
             bgcolor: "background.paper", overflow: "hidden",
           }}
         >

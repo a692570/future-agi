@@ -2,11 +2,10 @@ import PropTypes from "prop-types";
 import { useMemo, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
-  Box, Stack, Typography, TextField, MenuItem, Tooltip, Collapse, IconButton,
+  Box, Stack, Typography, TextField, MenuItem, Tooltip, IconButton,
   Table, TableBody, TableHead, TableRow, TableCell,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
-import { SectionCard } from "../../components/primitives";
 
 /* Plain-English hint per axis — surfaces on hover of each axis row
    so a non-technical reader can decode T/W/D/X/I/O without leaving
@@ -41,19 +40,9 @@ import {
  *   - No prose helper lines like "these need at least one scenario each";
  *     the empty state is the fraction "0/5" and the item's own hollow dot.
  */
-export default function CoverageMatrix({ scenarios, env, defaultExpanded = false }) {
+export default function CoverageMatrix({ scenarios, env, onClose }) {
   const [rowAxis, setRowAxis] = useState("T");
   const [colAxis, setColAxis] = useState("O");
-  /*
-    Collapsed by default when this component sits above the scenarios
-    list — users see the summary numbers (Axes / Pairs / Forced) in
-    the header on landing, and click the chevron to unfurl the full
-    per-axis table, forced-overlays checklist, pairwise heatmap and
-    guardrail list. Solves the discoverability issue where the
-    original placement (bottom of the tab) meant users had to scroll
-    past 80+ rows to know the panel existed.
-  */
-  const [expanded, setExpanded] = useState(defaultExpanded);
   const m = useMemo(() => buildPrdMatrix(scenarios, env, rowAxis, colAxis), [scenarios, env, rowAxis, colAxis]);
   const perAxis = useMemo(() => perAxisCoverage(scenarios, env), [scenarios, env]);
   const pairs = useMemo(() => pairwiseCoverage(scenarios, env), [scenarios, env]);
@@ -68,8 +57,6 @@ export default function CoverageMatrix({ scenarios, env, defaultExpanded = false
   const pairAvg = pairs.length
     ? pairs.reduce((sum, p) => sum + p.ratio, 0) / pairs.length
     : 0;
-
-  const toggle = () => setExpanded((v) => !v);
 
   /* Rich hover explainer — mounted as a Tooltip title (any ReactNode
      works). Hover the (i) chip to reveal, no click required. */
@@ -109,81 +96,69 @@ export default function CoverageMatrix({ scenarios, env, defaultExpanded = false
       </Typography>
     </Box>
   );
+  /*
+    Lives in the Coverage side drawer, so the drawer's header is this
+    panel's header: one title, the explainer, the three numbers and close.
+    Nothing folds — opening the drawer is already the choice to see it.
+  */
   return (
-    /*
-      Wrapper carries the click-to-expand behaviour — SectionCard's own
-      Box has no onClick prop, so we own that responsibility one level
-      up. The nested Collapse still animates the body content.
-    */
-    <Box onClick={toggle} sx={{ cursor: "pointer" }}>
-    <SectionCard
-      title={
-        <Stack direction="row" alignItems="center" spacing={0.75}>
-          <span>Coverage</span>
-          {/* Plain-English explainer for non-technical readers.
-              Hover the (i) chip to reveal — no click required.
-              Users who don't need it never see it. */}
-          <Tooltip
-            arrow
-            title={helpContent}
-            placement="right-start"
-            enterDelay={80}
-            leaveDelay={100}
-            slotProps={{
-              tooltip: {
-                sx: {
-                  maxWidth: 420,
-                  p: 1.5,
-                  bgcolor: "grey.900",
-                  color: "common.white",
-                  boxShadow: (t) => `0 12px 40px ${alpha(t.palette.common.black, 0.4)}`,
-                },
-                onClick: (e) => e.stopPropagation(),
-              },
-              arrow: { sx: { color: "grey.900" } },
-            }}
-          >
-            <Box
-              component="span"
-              onClick={(e) => e.stopPropagation()}
-              sx={{
-                display: "inline-flex", cursor: "help",
-                color: "text.subtitle",
-                "&:hover": { color: "text.primary" },
-              }}
-              aria-label="What is coverage?"
-            >
-              <Iconify icon="solar:info-circle-linear" width={15} />
-            </Box>
-          </Tooltip>
-        </Stack>
-      }
-      subtitle={expanded
-        ? `${scenarios.length} scenarios · what kinds of situations did we forget to test?`
-        : `${scenarios.length} scenarios · click to expand — what did we forget to test?`}
-      action={
-        <Stack direction="row" spacing={2.5} alignItems="center">
-          <SummaryStat label="Axes"   value={`${Math.round(overall * 100)}%`}  color={toneColor(overall)} />
-          <SummaryStat label="Pairs"  value={`${Math.round(pairAvg * 100)}%`}  color={toneColor(pairAvg)} />
-          <SummaryStat label="Forced" value={`${forced.length - forcedMissing.length}/${forced.length}`} color={toneColor((forced.length - forcedMissing.length) / Math.max(1, forced.length))} />
-          <IconButton
-            size="small"
-            onClick={(e) => { e.stopPropagation(); toggle(); }}
-            sx={{ color: "text.subtitle" }}
-            aria-label={expanded ? "Collapse coverage" : "Expand coverage"}
-          >
-            <Iconify
-              icon="solar:alt-arrow-down-linear" width={16}
-              sx={{ transition: "transform 0.15s ease", transform: expanded ? "rotate(180deg)" : "none" }}
-            />
+    <Stack sx={{ height: "100%", minHeight: 0 }}>
+      <Stack
+        direction="row" alignItems="center" spacing={2.5}
+        sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
+      >
+        <Box flex={1} minWidth={0}>
+          <Stack direction="row" alignItems="center" spacing={0.75}>
+            <Typography sx={{ typography: "s1", fontWeight: 700 }}>Coverage</Typography>
+      <Tooltip
+        arrow
+        title={helpContent}
+        placement="right-start"
+        enterDelay={80}
+        leaveDelay={100}
+        slotProps={{
+          tooltip: {
+            sx: {
+              maxWidth: 420,
+              p: 1.5,
+              bgcolor: "grey.900",
+              color: "common.white",
+              boxShadow: (t) => `0 12px 40px ${alpha(t.palette.common.black, 0.4)}`,
+            },
+            onClick: (e) => e.stopPropagation(),
+          },
+          arrow: { sx: { color: "grey.900" } },
+        }}
+      >
+        <Box
+          component="span"
+          onClick={(e) => e.stopPropagation()}
+          sx={{
+            display: "inline-flex", cursor: "help",
+            color: "text.subtitle",
+            "&:hover": { color: "text.primary" },
+          }}
+          aria-label="What is coverage?"
+        >
+          <Iconify icon="solar:info-circle-linear" width={15} />
+        </Box>
+      </Tooltip>
+          </Stack>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+            {`${scenarios.length} scenarios · what kinds of situations did we forget to test?`}
+          </Typography>
+        </Box>
+        <SummaryStat label="Axes"   value={`${Math.round(overall * 100)}%`}  color={toneColor(overall)} />
+        <SummaryStat label="Pairs"  value={`${Math.round(pairAvg * 100)}%`}  color={toneColor(pairAvg)} />
+        <SummaryStat label="Forced" value={`${forced.length - forcedMissing.length}/${forced.length}`} color={toneColor((forced.length - forcedMissing.length) / Math.max(1, forced.length))} />
+        {onClose && (
+          <IconButton size="small" onClick={onClose} aria-label="Close coverage">
+            <Iconify icon="eva:close-fill" width={18} />
           </IconButton>
-        </Stack>
-      }
-    >
-      {/* Body doesn't inherit the click-to-expand — clicking inside the
-          expanded content (axis picker, tooltips) shouldn't fold the
-          whole thing away. Stop propagation at the body wrapper. */}
-      <Collapse in={expanded} timeout="auto" unmountOnExit onClick={(e) => e.stopPropagation()}>
+        )}
+      </Stack>
+
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       {/* ── AXES TABLE ─────────────────────────────────────────────────── */}
       <Table size="small" sx={{
         "& .MuiTableCell-root": {
@@ -420,16 +395,15 @@ export default function CoverageMatrix({ scenarios, env, defaultExpanded = false
           ))}
         </Stack>
       </Box>
-      </Collapse>
-    </SectionCard>
-    </Box>
+      </Box>
+    </Stack>
   );
 }
 
 CoverageMatrix.propTypes = {
   env: PropTypes.object,
   scenarios: PropTypes.array.isRequired,
-  defaultExpanded: PropTypes.bool,
+  onClose: PropTypes.func,
 };
 
 const headerCellSx = {

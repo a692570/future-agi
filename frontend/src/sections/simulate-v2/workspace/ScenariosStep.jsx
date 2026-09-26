@@ -7,7 +7,7 @@ import {
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { alpha } from "@mui/material/styles";
-import { SectionCard, PersonaBadge } from "../components/primitives";
+import { PersonaBadge } from "../components/primitives";
 import { generatedPool } from "../_mock/scenarios";
 import { staleScenarios, proofStatus, autoReprove, brokenScenarios, markEdited } from "../_mock/proofs";
 import { subTasksFor } from "../_mock/contract";
@@ -15,7 +15,8 @@ import ScenarioDetail from "../components/ScenarioDetail";
 import CoverageMatrix from "./scenarios/CoverageMatrix";
 import AddScenariosDrawer from "./scenarios/AddScenariosDrawer";
 import ScenarioEditor from "./scenarios/ScenarioEditor";
-import ScenarioTable from "./scenarios/ScenarioTable";
+import { BatchContainers, BatchHistoryPanel, AsOfBanner } from "./scenarios/BatchDesigns";
+import { batchesFrom } from "./scenarios/batchDesignModel";
 import SelectionBar from "./scenarios/SelectionBar";
 import { PickRouteIllustration } from "./scenarios/RouteThumbs";
 import {
@@ -25,7 +26,7 @@ import {
   getScenarioSelection,
 } from "../_mock/scenarioSelectionBus";
 import { injectComposerScaffold } from "../_mock/composerScaffoldBus";
-import { stampProvenance, defaultBatchId, ensureProvenance, provenanceLabel, sourceOf, groupByBatch, relativeTime } from "../_mock/scenarioProvenance";
+import { stampProvenance, defaultBatchId, ensureProvenance, sourceOf, groupByBatch } from "../_mock/scenarioProvenance";
 
 /* AddScenariosDrawer emits `route` ids (twin | production | dataset |
    script); provenance vocab is different, so translate at the boundary. */
@@ -64,6 +65,12 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   /* Default to the table view — it's the denser, more scannable
      shape and it's what the product team wanted users to land on. */
   const [view, setView] = useState("table");
+  /* The history drawer, the suite "as of" a batch, and the batch the
+     history just jumped to. */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [asOf, setAsOf] = useState(null);
+  const [flashId, setFlashId] = useState(null);
+  const flashTimer = useRef(null);
   /*
     Search + use-case filter are shared by both views now. They used to
     live inside the list-only toolbar, which meant switching to the
@@ -441,7 +448,9 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   }, [buildMode, env.id, envState?.activeEnvVersion, stale.length]);
 
   return (
-    <Box sx={{ p: 2 }}>
+    /* The build pane already frames this panel, so it only needs a sliver of
+       side padding there; the workspace keeps the full inset. */
+    <Box sx={{ py: 2, px: buildMode ? 1 : 2 }}>
       {/*
         Title and the add button on one line. Adding is a secondary action on
         this screen — the scenarios are already derived — so it is an outlined
@@ -526,14 +535,23 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
             );
           })}
           <Box flex={1} />
+          {/* Outlined like Group by and Filter, so it reads as an action.
+              Hidden while rows are selected — the selection bar's actions
+              are the only thing that row of the page is for then. */}
+          {(locked || selectedIds.length === 0) && (
           <Button
-            size="small"
+            size="small" variant="outlined"
             onClick={() => setCoverageOpen(true)}
-            startIcon={<Iconify icon="solar:chart-square-linear" width={15} />}
-            sx={{ typography: "s2", fontWeight: 600, color: "text.secondary", "&:hover": { color: "text.primary", bgcolor: "action.hover" } }}
+            startIcon={<Iconify icon="solar:chart-square-linear" width={14} />}
+            sx={{
+              typography: "s2", fontWeight: 700, textTransform: "none", height: 30,
+              color: "text.primary", borderColor: "divider",
+              "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
+            }}
           >
             Coverage
           </Button>
+          )}
         </Stack>
       )}
 
@@ -596,7 +614,9 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           toolbar (search · filter · list/table tabs) that both views
           read from, so filters survive a view switch.
         */
-        <SectionCard sx={{ mb: 2, overflow: "visible" }}>
+        /* No frame around the toolbar — it is a row of controls over the
+           batch containers, not a container of its own. */
+        <Box sx={{ mb: 1.5 }}>
           {/*
             Sticky toolbar row. It pins to the top of the scenarios
             viewport as the user scrolls through 88+ rows, so when
@@ -609,7 +629,6 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           <Box sx={{
             position: "sticky", top: 0, zIndex: 3,
             bgcolor: "background.paper",
-            borderBottom: "1px solid", borderColor: "divider",
           }}>
           {!locked && selectedIds.length > 0 ? (
             <SelectionBar
@@ -621,7 +640,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
           ) : (
           <Stack
             direction="row" alignItems="center" spacing={1}
-            sx={{ px: 2.5, py: 1.25 }}
+            sx={{ py: 1.25 }}
           >
             <TextField
               size="small"
@@ -629,7 +648,8 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search scenarios by name, task or use case…"
               InputProps={{
-                sx: { typography: "s2" },
+                /* Same 30px as the Group by and Filter buttons beside it. */
+                sx: { typography: "s2", height: 30, "& .MuiInputBase-input": { py: 0 } },
                 startAdornment: (
                   <Box sx={{ pr: 0.75, pl: 0.25, display: "flex", color: "text.subtitle" }}>
                     <Iconify icon="solar:magnifer-linear" width={14} />
@@ -718,6 +738,21 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
               </>
             )}
             <Box sx={{ flex: 1 }} />
+            {/* How the suite grew — beside the view toggle, since both are
+                about how you look at the list. */}
+            <Button
+              size="small" variant="outlined"
+              onClick={() => setHistoryOpen((v) => !v)}
+              startIcon={<Iconify icon="solar:history-linear" width={14} />}
+              sx={{
+                typography: "s2", fontWeight: 700, textTransform: "none", height: 30, flexShrink: 0,
+                color: "text.primary", borderColor: historyOpen ? "text.primary" : "divider",
+                bgcolor: historyOpen ? "action.selected" : "transparent",
+                "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
+              }}
+            >
+              History
+            </Button>
             {/* Table or list — two icons, named on hover. */}
             <Stack
               direction="row"
@@ -760,42 +795,98 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
               {/* Batches render as a timeline below this toolbar card. */}
             </>
           )}
-        </SectionCard>
+        </Box>
       )}
 
 
-      {/* Batches as chronological events on a vertical spine — who added
-          them and when — with the Group by groups inside each. */}
+      {/* Each batch in its own container, newest first — who added it and
+          when on top, its scenarios under the Group by inside. */}
       {shown.length > 0 && (
         <ScenarioRowContext.Provider value={rowContext}>
-          <BatchTimeline
-            groups={shownGroups}
-            view={view}
-            env={env}
-            envState={envState}
-            buildMode={buildMode}
-            selectedIds={selectedIds}
-            onSelectionChange={handleSelectionChange}
-            onEdit={setEditing}
-            onRemove={removeScenario}
-            onHideGroup={toggleGroupHidden}
-            locked={locked}
-          />
+          {(() => {
+            const all = batchesFrom(shownGroups);
+            /* History is of the whole suite — not of what the search or a
+               quick filter happens to show. */
+            const history = groupByBatch(selected);
+            const asOfBatch = asOf ? history.find((b) => b.batchId === asOf) : null;
+            const cutoff = asOfBatch ? Date.parse(asOfBatch.addedAt) : null;
+            const batches = cutoff == null ? all : all.filter((b) => Date.parse(b.meta.addedAt) <= cutoff);
+            const shownCount = cutoff == null ? selected.length
+              : history.filter((b) => Date.parse(b.addedAt) <= cutoff).reduce((a, b) => a + b.scenarios.length, 0);
+            const pick = (id) => {
+              const target = history.find((b) => b.batchId === id);
+              /* A batch hidden by the as-of view comes back into view first. */
+              if (asOfBatch && target && Date.parse(target.addedAt) > cutoff) setAsOf(null);
+              setFlashId(id);
+              clearTimeout(flashTimer.current);
+              flashTimer.current = setTimeout(() => setFlashId(null), 1600);
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.getElementById(`batch-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }));
+            };
+            const containers = (
+              <BatchContainers
+                batches={batches}
+                flashId={flashId}
+                latestId={history[0]?.batchId}
+                view={view}
+                tableProps={{
+                  env,
+                  envVersion: currentEnvVersion(env, envState).label,
+                  onEdit: setEditing,
+                  onRemove: removeScenario,
+                  onHideGroup: toggleGroupHidden,
+                  selectedIds,
+                  onSelectionChange: handleSelectionChange,
+                  locked,
+                }}
+                renderList={(innerGroups) => (
+                  <GroupedScenarioList
+                    groups={innerGroups}
+                    env={env}
+                    envState={envState}
+                    buildMode={buildMode}
+                    onEdit={setEditing}
+                    onRemove={removeScenario}
+                    onHideGroup={toggleGroupHidden}
+                    selectedIds={selectedIds}
+                    onSelectionChange={handleSelectionChange}
+                    locked={locked}
+                  />
+                )}
+              />
+            );
+            return (
+              <>
+                <AsOfBanner
+                  batch={asOfBatch}
+                  shown={shownCount}
+                  total={selected.length}
+                  hiddenBatches={history.filter((b) => cutoff != null && Date.parse(b.addedAt) > cutoff).length}
+                  onBack={() => setAsOf(null)}
+                />
+                {containers}
+                {/* Opens from the right edge like Figma's version history, and
+                    stays open while you scroll and click the batches. */}
+                <SideDrawer persistent open={historyOpen} onClose={() => setHistoryOpen(false)} width={340}>
+                  <BatchHistoryPanel
+                    batches={history}
+                    runs={(envState.runs || []).filter((r) => !r.synthetic)}
+                    total={selected.length}
+                    asOf={asOfBatch ? asOf : null}
+                    onPick={pick}
+                    onViewAsOf={(id) => { setAsOf(id); if (id) pick(id); }}
+                    onClose={() => setHistoryOpen(false)}
+                  />
+                </SideDrawer>
+              </>
+            );
+          })()}
         </ScenarioRowContext.Provider>
       )}
 
       <SideDrawer open={coverageOpen} onClose={() => setCoverageOpen(false)} width={{ xs: "100%", md: 880 }}>
-        <Stack sx={{ height: "100%" }}>
-          <Stack direction="row" alignItems="center" sx={{ px: 2.5, py: 1.5, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-            <Typography sx={{ typography: "s1", fontWeight: 700, flex: 1 }}>Coverage</Typography>
-            <IconButton size="small" onClick={() => setCoverageOpen(false)}>
-              <Iconify icon="eva:close-fill" width={18} />
-            </IconButton>
-          </Stack>
-          <Box sx={{ flex: 1, overflowY: "auto", p: 2.5 }}>
-            <CoverageMatrix scenarios={selected} env={env} defaultExpanded />
-          </Box>
-        </Stack>
+        <CoverageMatrix scenarios={selected} env={env} onClose={() => setCoverageOpen(false)} />
       </SideDrawer>
 
       {/*
@@ -906,108 +997,6 @@ function RoutePlaceholder({ env, onAdd }) {
 }
 RoutePlaceholder.propTypes = { env: PropTypes.object.isRequired, onAdd: PropTypes.func };
 
-export function ScenarioRow({ row, index, onRemove, selectable, checked, onToggle }) {
-  return (
-    <Stack
-      direction="row"
-      alignItems="center"
-      spacing={2}
-      sx={{
-        px: 2.5, py: 1.5,
-        cursor: selectable ? "pointer" : "default",
-        "&:hover": selectable ? { bgcolor: "action.hover" } : {},
-      }}
-      onClick={selectable ? onToggle : undefined}
-    >
-      {selectable ? (
-        <Iconify
-          icon={checked ? "solar:check-square-bold" : "solar:stop-linear"}
-          width={18}
-          sx={{ color: checked ? "primary.main" : "text.subtitle", flexShrink: 0 }}
-        />
-      ) : (
-        <Typography sx={{ typography: "s3", color: "text.subtitle", width: 20, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-          {index + 1}
-        </Typography>
-      )}
-
-      <Box sx={{ flex: 1.4, minWidth: 0 }}>
-        <Stack direction="row" alignItems="center" spacing={0.75}>
-          <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.title}</Typography>
-          {row.critical && (
-            <Tooltip title="Critical — a failure here is a release blocker" arrow>
-              <Box sx={{ display: "flex" }}>
-                <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: "#DC2626" }} />
-              </Box>
-            </Tooltip>
-          )}
-        </Stack>
-        <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.task}</Typography>
-      </Box>
-
-      {/* Wide enough for a full job title — roles were truncating at 180. */}
-      <Box sx={{ width: 240, flexShrink: 0, display: { xs: "none", md: "block" } }}>
-        <PersonaBadge persona={row.persona} compact />
-      </Box>
-
-      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ width: 62, flexShrink: 0, display: { xs: "none", sm: "flex" } }}>
-        <Iconify icon="solar:chat-round-line-linear" width={13} sx={{ color: "text.subtitle" }} />
-        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>~{row.turns}</Typography>
-      </Stack>
-
-      {onRemove && (
-        <IconButton size="small" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
-          <Iconify icon="solar:close-circle-linear" width={16} sx={{ color: "text.subtitle" }} />
-        </IconButton>
-      )}
-    </Stack>
-  );
-}
-ScenarioRow.propTypes = {
-  row: PropTypes.object, index: PropTypes.number, onRemove: PropTypes.func,
-  selectable: PropTypes.bool, checked: PropTypes.bool, onToggle: PropTypes.func,
-};
-
-/**
- * Provenance form on a scenario row — the visual mark that PRD §6.1.2
- * mandates. Three variants:
- *   - "user"      → filled amber square  ("you started this")
- *   - "auto"      → hollow ring           ("we started this")
- *   - "assistant" → filled green dot     ("the assistant did this")
- * Hover tooltip carries the full attribution.
- */
-export function ProvenanceGlyph({ scenario, size = 10 }) {
-  const s = ensureProvenance(scenario);
-  const src = sourceOf(s.source);
-  const label = provenanceLabel(s);
-  return (
-    <Tooltip title={`${src.label} · ${label}`} arrow>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, flexShrink: 0 }}>
-        {src.formKind === "user" && (
-          <Box sx={{
-            width: size, height: size, borderRadius: 0.375,
-            bgcolor: "#F59E0B",
-          }} />
-        )}
-        {src.formKind === "auto" && (
-          <Box sx={{
-            width: size, height: size, borderRadius: "50%",
-            border: "1.5px solid",
-            borderColor: (t) => alpha(t.palette.text.primary, 0.35),
-          }} />
-        )}
-        {src.formKind === "assistant" && (
-          <Box sx={{
-            width: size, height: size, borderRadius: "50%",
-            bgcolor: "#16A34A",
-          }} />
-        )}
-      </Box>
-    </Tooltip>
-  );
-}
-ProvenanceGlyph.propTypes = { scenario: PropTypes.object, size: PropTypes.number };
-
 /* ── grouping ────────────────────────────────────────────────────────────── */
 
 /**
@@ -1112,7 +1101,7 @@ const groupKeyOf = (row, mode, env) => {
 /* Batches are ALWAYS the outer grouping — this dropdown selects the
    INNER grouping shown within each batch. "Batch" itself is not an
    option here because everything is batched by default. */
-export const SCENARIO_GROUPINGS = [
+const SCENARIO_GROUPINGS = [
   { id: "goal",    label: "Goal",     icon: "solar:target-linear" },
   { id: "persona", label: "Persona",  icon: "solar:user-rounded-linear" },
   { id: "subgoal", label: "Sub-goal", icon: "solar:map-linear" },
@@ -1144,246 +1133,6 @@ const groupScenarios = (rows, mode = "goal", env) => {
   });
   return out;
 };
-
-/* ── v2 · timeline view ────────────────────────────────────────────
-   An alternative to BatchCardsList (v1). Batches read as events on a
-   vertical spine — like a git-log or activity feed. Each batch node
-   carries author, time, source label and count; expanded, its
-   scenarios sit indented to the right of the spine under the current
-   inner group-by. Kept in the same file so swapping v1 ↔ v2 is a
-   one-line edit at the callsite. */
-
-function BatchTimeline({ groups, view, env, envState, buildMode, selectedIds, onSelectionChange, onEdit, onRemove, onHideGroup, locked }) {
-  const batches = useMemo(() => {
-    const out = [];
-    let current = null;
-    groups.forEach((g) => {
-      const meta = g.batchMeta;
-      if (!meta) return;
-      if (!current || current.meta.batchId !== meta.batchId) {
-        current = { meta, innerGroups: [], rows: [] };
-        out.push(current);
-      }
-      current.innerGroups.push(g);
-      current.rows.push(...g.rows);
-    });
-    return out;
-  }, [groups]);
-
-  if (batches.length === 0) return null;
-
-  return (
-    <Box sx={{ position: "relative", pl: 3.5, pr: 0.5 }}>
-      {/* Vertical spine down the left. Tucked behind the nodes so the
-          nodes appear to sit on the line. */}
-      <Box sx={{
-        position: "absolute", left: 15, top: 12, bottom: 12, width: "2px",
-        bgcolor: "divider",
-        borderRadius: 1,
-      }} />
-      <Stack spacing={4}>
-        {batches.map((b) => (
-          <TimelineNode
-            key={b.meta.batchId}
-            batch={b.meta}
-            rowCount={b.rows.length}
-            innerGroups={b.innerGroups}
-            view={view}
-            env={env}
-            envState={envState}
-            buildMode={buildMode}
-            selectedIds={selectedIds}
-            onSelectionChange={onSelectionChange}
-            onEdit={onEdit}
-            onRemove={onRemove}
-            onHideGroup={onHideGroup}
-            locked={locked}
-            defaultOpen
-          />
-        ))}
-      </Stack>
-    </Box>
-  );
-}
-BatchTimeline.propTypes = {
-  groups: PropTypes.array, view: PropTypes.string,
-  env: PropTypes.object, envState: PropTypes.object, buildMode: PropTypes.bool,
-  selectedIds: PropTypes.array, onSelectionChange: PropTypes.func,
-  onEdit: PropTypes.func, onRemove: PropTypes.func, onHideGroup: PropTypes.func,
-  locked: PropTypes.bool,
-};
-
-function TimelineNode({ batch, rowCount, innerGroups, view, env, envState, buildMode, selectedIds, onSelectionChange, onEdit, onRemove, onHideGroup, locked, defaultOpen }) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  const src = sourceOf(batch.source);
-  const initials = (batch.addedBy?.name || "System").split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-  /* First few scenario names to show inline under the header — makes
-     it obvious there IS content in this batch, so the "Show N" button
-     doesn't have to carry the whole discovery load. */
-  const previewNames = innerGroups.flatMap((g) => g.rows).slice(0, 3).map((r) => r.name || r.title || r.id);
-  return (
-    <Box sx={{ position: "relative" }}>
-      <Box sx={{
-        position: "absolute", left: -22, top: 8,
-        width: 20, height: 20, borderRadius: "50%",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        bgcolor: "background.paper",
-        border: "2px solid",
-        borderColor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.35 : 0.25),
-      }}>
-        <Box sx={{
-          width: 8, height: 8, borderRadius: "50%",
-          bgcolor: "text.primary",
-        }} />
-      </Box>
-
-      {/* Batch header. Whole row is clickable so the affordance is
-          redundant with the explicit Show/Hide button on the right —
-          per user callout that a tiny chevron was too easy to miss. */}
-      <Stack
-        direction="row" alignItems="flex-start" spacing={1.5}
-        onClick={() => setOpen((v) => !v)}
-        sx={{
-          px: 1.5, py: 1.25, borderRadius: 1.25, cursor: "pointer",
-          "&:hover": { bgcolor: "action.hover" },
-        }}
-      >
-        <Box sx={{
-          width: 28, height: 28, borderRadius: "50%",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.14 : 0.08),
-          color: "text.primary", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4,
-          flexShrink: 0,
-        }}>
-          {initials}
-        </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-            <Typography sx={{ typography: "s2", fontWeight: 700, fontSize: 13.5 }}>
-              {batch.addedBy?.name || "System"}
-            </Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 12 }}>
-              added {rowCount} {rowCount === 1 ? "scenario" : "scenarios"}
-            </Typography>
-            <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 12 }}>
-              · via {src.label.toLowerCase()}
-            </Typography>
-          </Stack>
-          <Typography sx={{ typography: "s3", color: "text.subtitle", fontSize: 11, mt: 0.25 }}>
-            {relativeTime(batch.addedAt)} · {new Date(batch.addedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-          </Typography>
-          {/* Preview chips of the first few scenario names — hidden
-              when expanded (the full list carries the same content). */}
-          {!open && previewNames.length > 0 && (
-            <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
-              {previewNames.map((n) => (
-                <Box key={n} sx={{
-                  px: 1, py: 0.375, borderRadius: 0.75,
-                  border: "1px solid", borderColor: "divider",
-                  bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.03 : 0.02),
-                }}>
-                  <Typography noWrap sx={{
-                    typography: "s3", fontSize: 11, color: "text.subtitle",
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                    maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis",
-                  }} title={n}>
-                    {n}
-                  </Typography>
-                </Box>
-              ))}
-              {rowCount > previewNames.length && (
-                <Typography sx={{
-                  typography: "s3", fontSize: 11, color: "text.subtitle",
-                  alignSelf: "center", ml: 0.25,
-                }}>
-                  +{rowCount - previewNames.length} more
-                </Typography>
-              )}
-            </Stack>
-          )}
-        </Box>
-        {/* Explicit expand affordance — button-styled with border so it
-            reads as an action, not a static count. Whole row is still
-            clickable for a big hit area. */}
-        <Stack
-          direction="row" alignItems="center" spacing={0.75}
-          onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-          sx={{
-            px: 1.25, py: 0.5, borderRadius: 0.875,
-            border: "1px solid", borderColor: "divider",
-            bgcolor: "background.paper",
-            cursor: "pointer", flexShrink: 0,
-            transition: "border-color 120ms, background-color 120ms",
-            "&:hover": {
-              borderColor: (t) => alpha(t.palette.text.primary, 0.4),
-              bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.06 : 0.03),
-            },
-          }}
-        >
-          <Typography sx={{
-            typography: "s2", fontWeight: 600, fontSize: 12,
-            color: "text.primary", whiteSpace: "nowrap",
-          }}>
-            {open ? `Hide ${rowCount}` : `Show ${rowCount} scenarios`}
-          </Typography>
-          <Iconify
-            icon={open ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"}
-            width={13} sx={{ color: "text.subtitle" }}
-          />
-        </Stack>
-      </Stack>
-
-      {/* Expanded batch body — sits indented under the node, still
-          right of the spine. Rendered as a lightly bordered surface
-          so it reads as "this batch's payload" without competing with
-          the batch header. */}
-      {open && (
-        <Box sx={{
-          mt: 1, ml: 0.5,
-          border: "1px solid", borderColor: "divider", borderRadius: 1.5,
-          bgcolor: "background.paper",
-          overflow: "hidden",
-        }}>
-          {view === "table" ? (
-            <ScenarioTable
-              rows={innerGroups.flatMap((g) => g.rows)}
-              groups={innerGroups}
-              env={env}
-              envVersion={currentEnvVersion(env, envState).label}
-              onEdit={onEdit}
-              onRemove={onRemove}
-              onHideGroup={onHideGroup}
-              selectedIds={selectedIds}
-              onSelectionChange={onSelectionChange}
-              locked={locked}
-            />
-          ) : (
-            <GroupedScenarioList
-              groups={innerGroups}
-              env={env}
-              envState={envState}
-              buildMode={buildMode}
-              onEdit={onEdit}
-              onRemove={onRemove}
-              onHideGroup={onHideGroup}
-              selectedIds={selectedIds}
-              onSelectionChange={onSelectionChange}
-              locked={locked}
-            />
-          )}
-        </Box>
-      )}
-    </Box>
-  );
-}
-TimelineNode.propTypes = {
-  batch: PropTypes.object, rowCount: PropTypes.number, innerGroups: PropTypes.array,
-  view: PropTypes.string, env: PropTypes.object, envState: PropTypes.object, buildMode: PropTypes.bool,
-  selectedIds: PropTypes.array, onSelectionChange: PropTypes.func,
-  onEdit: PropTypes.func, onRemove: PropTypes.func, onHideGroup: PropTypes.func,
-  locked: PropTypes.bool, defaultOpen: PropTypes.bool,
-};
-
 
 /**
  * Just the grouped body — search, filter and view tabs live at the
@@ -1447,7 +1196,7 @@ GroupedScenarioList.propTypes = {
  * Chevron flips right → down on toggle. Header row is the whole click
  * target so there's no tiny hit area.
  */
-function CollapsibleGroup({ group, env, envState, buildMode, onEdit, onRemove, onHideGroup, selectedSet, onToggleRow, onToggleGroup, selectable, locked = false }) {
+function CollapsibleGroup({ group, env, envState, buildMode, onEdit, onRemove, selectedSet, onToggleRow, onToggleGroup, selectable, locked = false }) {
   const [open, setOpen] = useState(true);
 
   const selectedInGroup = group.rows.filter((r) => selectedSet?.has(r.id)).length;
@@ -1516,17 +1265,6 @@ function CollapsibleGroup({ group, env, envState, buildMode, onEdit, onRemove, o
         >
           {group.rows.length} {group.rows.length === 1 ? "scenario" : "scenarios"}
         </Typography>
-        {onHideGroup && (
-          <Tooltip arrow title="Hide this group">
-            <IconButton
-              size="small"
-              onClick={(e) => { e.stopPropagation(); onHideGroup(group.id); }}
-              sx={{ flexShrink: 0, color: "text.subtitle", "&:hover": { color: "text.primary" } }}
-            >
-              <Iconify icon="solar:eye-closed-linear" width={15} />
-            </IconButton>
-          </Tooltip>
-        )}
       </Stack>
 
       {open && (
