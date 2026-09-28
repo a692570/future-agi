@@ -19,7 +19,9 @@ These tests seed the real CH25 ``spans`` table of the test database, one row
 per storage shape, and ask the endpoint for the list with the toggle off and
 on. Because ClickHouse drops simulator calls first, the view's check only
 decides a row the predicate missed, so a second test turns the predicate off
-and requires the Python check alone to drop them from the hydrated rows.
+and requires the Python check alone to drop them from the hydrated rows. The
+same check hides a call the predicate misses, so a third test turns it off and
+requires the predicate alone to drop them.
 
 Since the collector began ranking ``gen_ai.provider.name`` above
 ``gen_ai.system``, a Vapi call whose assistant runs an OpenAI model is stored
@@ -47,6 +49,9 @@ from tracer.services.clickhouse.v2.adapter import (
     CH_INSERT_COLUMNS,
     adapt,
     row_to_tuple,
+)
+from tracer.services.clickhouse.v2.query_builders.voice_call_list import (
+    VoiceCallListQueryBuilderV2,
 )
 from tracer.tests._ch_seed import _get_ch_client, seed_ch_spans
 
@@ -278,6 +283,22 @@ def test_python_check_alone_drops_the_simulator_calls(
     # and passing it the provider column drops no call stored under its LLM
     # provider.
     monkeypatch.setattr(voice_call_list, "simulator_call_sql", lambda **_: "0")
+
+    listed = _voice_list(auth_client, voice_calls, True)
+
+    assert listed == _LISTED_WITH_LLM_PROVIDER_CALLS[True]
+
+
+def test_clickhouse_predicate_alone_drops_the_simulator_calls(
+    auth_client, voice_calls, llm_provider_calls, monkeypatch
+):
+    # With the view's check keeping every row, only simulator_call_sql can
+    # drop a simulator call, including one stored under its LLM provider.
+    monkeypatch.setattr(
+        VoiceCallListQueryBuilderV2,
+        "is_simulator_call",
+        staticmethod(lambda raw_log, provider: False),
+    )
 
     listed = _voice_list(auth_client, voice_calls, True)
 
