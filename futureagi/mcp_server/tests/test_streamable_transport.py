@@ -229,10 +229,27 @@ async def test_streamable_http_lists_and_executes_generated_tools(
             }
         )()
         assert {tool.name for tool in tools.tools} == expected
+        listed = {tool.name: tool for tool in tools.tools}
+        for name in ("add_dataset_prompt", "update_dataset_prompt", "create_scenario"):
+            assert listed[name].annotations.openWorldHint is True
+        assert (
+            listed["list_agents"].inputSchema["properties"]["limit"]["maximum"] == 100
+        )
         result = await client.call_tool("whoami", {})
         assert result.isError is False
         assert result.structuredContent["id"] == str(user.id)
         assert result.structuredContent["default_workspace_id"] == str(workspace.id)
+
+
+async def test_protocol_rejects_oversized_pages_before_api_dispatch(protocol_client):
+    async with protocol_client() as client:
+        with patch("mcp_server.api_executor.resolve") as resolve:
+            result = await client.call_tool("list_agents", {"limit": 101})
+        assert result.isError is True
+        assert "100" in result.content[0].text
+        resolve.assert_not_called()
+        accepted = await client.call_tool("list_agents", {"limit": 100})
+        assert accepted.isError is False
 
 
 async def test_streamable_http_hands_the_api_key_to_the_executor(

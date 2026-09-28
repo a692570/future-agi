@@ -13,7 +13,7 @@ interface ToolGroupsEnvelope {
 }
 interface ToolListEnvelope {
   status: boolean;
-  result: { tools: { name: string }[] };
+  result: { tools: { name: string; category: string }[] };
 }
 
 test('SET-E2E-001: admin restricts MCP tool groups for connected clients', {
@@ -24,16 +24,36 @@ test('SET-E2E-001: admin restricts MCP tool groups for connected clients', {
     steps: ['open Settings MCP Server', 'expand Tool Groups',
             'turn off Datasets & Knowledge Bases', 'save the selection'],
     backendChecks: [
-      'GET /mcp/config/tool-groups/ omits datasets from enabled_groups',
-      'PG mcp_server_mcptoolgroupconfig.enabled_groups matches that selection for the actor org',
-      'GET /mcp/internal/tools/ still lists whoami and no longer lists list_datasets',
-      'POST /mcp/internal/tool-call/ list_datasets returns 403 while whoami still succeeds',
+      'GET /mcp/config/tool-groups/ equals the initial group set minus datasets',
+      'PG mcp_server_mcptoolgroupconfig.enabled_groups equals that exact set for the actor connection',
+      'GET /mcp/internal/tools/ equals the initial tool set minus all dataset tools',
+      'POST /mcp/internal/tool-call/ list_datasets returns 403 while whoami and list_projects still succeed',
     ],
   }),
-}, async ({ page, actor, probe }) => {
+}, async ({ page, actor, probe }, testInfo) => {
   // Navigation + accordion + save + 2 × UI_READY can outrun the 120s default
   // on a loaded stack; fail on the assertion that ran out instead.
   test.setTimeout(240_000);
+
+  const config = await actor.api.get<{
+    result: { id: string };
+  }>('/mcp/config/');
+  const initialGroups = await actor.api.get<ToolGroupsEnvelope>(TOOL_GROUPS_PATH);
+  const initialTools = await actor.api.get<ToolListEnvelope>(TOOL_LIST_PATH);
+  expect(initialGroups.result.enabled_groups).toContain('datasets');
+  expect(initialGroups.result.enabled_groups).toContain('observability');
+  const expectedGroups = initialGroups.result.enabled_groups
+    .filter((group) => group !== 'datasets').sort();
+  const expectedTools = initialTools.result.tools
+    .filter((tool) => tool.category !== 'datasets').map((tool) => tool.name).sort();
+  expect(initialTools.result.tools.find((tool) => tool.name === 'list_datasets')?.category)
+    .toBe('datasets');
+  expect(expectedTools).toContain('list_projects');
+  await testInfo.attach('mcp-selection', {
+    body: JSON.stringify({ connectionId: config.result.id, organizationId: actor.organizationId,
+      initialGroups: initialGroups.result.enabled_groups, expectedGroups, expectedTools }),
+    contentType: 'application/json',
+  });
 
   await test.step('UI: open MCP Server and restrict the datasets group', async () => {
     await page.goto('/dashboard/settings/mcp-server', { waitUntil: 'domcontentloaded' });
@@ -46,7 +66,7 @@ test('SET-E2E-001: admin restricts MCP tool groups for connected clients', {
     }).filter({ has: page.getByRole('checkbox') });
     await expect(datasetsRow.getByRole('checkbox')).toBeChecked({ timeout: UI_READY });
     await datasetsRow.getByRole('checkbox').click();
-    await expect(datasetsRow.getByRole('checkbox')).not.toBeChecked();
+    await expect(datasetsRow.getByRole('checkbox')).not.toBeChecked({ timeout: UI_READY });
 
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expect(page.getByText('Tool groups updated successfully'))
@@ -56,35 +76,36 @@ test('SET-E2E-001: admin restricts MCP tool groups for connected clients', {
   await test.step('API: tool-groups and tool list match the saved selection', async () => {
     const groups = await actor.api.get<ToolGroupsEnvelope>(TOOL_GROUPS_PATH);
     expect(groups.status).toBe(true);
-    expect(groups.result.enabled_groups).toContain('context');
-    expect(groups.result.enabled_groups).not.toContain('datasets');
+    expect([...groups.result.enabled_groups].sort()).toEqual(expectedGroups);
 
     const listed = await actor.api.get<ToolListEnvelope>(TOOL_LIST_PATH);
     const names = listed.result.tools.map((tool) => tool.name);
-    expect(names).toContain('whoami');
-    expect(names).not.toContain('list_datasets');
+    expect(listed.status).toBe(true);
+    expect(names.sort()).toEqual(expectedTools);
   });
 
-  await test.step('storage: PG row for the actor org dropped datasets', async () => {
+  await test.step('storage: PG preserves every unaffected group for the actor connection', async () => {
     const rows = await probe.pg<{ enabled_groups: string[] }>(
       `SELECT c.enabled_groups
          FROM mcp_server_mcptoolgroupconfig c
          JOIN mcp_server_mcpconnection conn ON c.connection_id = conn.id
         WHERE conn.organization_id = $1
+          AND conn.id = $2
           AND conn.deleted = false
           AND c.deleted = false`,
-      [actor.organizationId],
+      [actor.organizationId, config.result.id],
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].enabled_groups).toContain('context');
-    expect(rows[0].enabled_groups).not.toContain('datasets');
+    expect([...rows[0].enabled_groups].sort()).toEqual(expectedGroups);
   });
 
-  await test.step('API: disabled group is 403; context tools still run', async () => {
-    const whoami = await actor.api.post<{ status: boolean }>(
-      TOOL_CALL_PATH, { tool_name: 'whoami', params: {} },
-    );
-    expect(whoami.status).toBe(true);
+  await test.step('API: disabled group is 403; unaffected tools still run', async () => {
+    for (const tool_name of ['whoami', 'list_projects']) {
+      const result = await actor.api.post<{ status: boolean }>(
+        TOOL_CALL_PATH, { tool_name, params: {} },
+      );
+      expect(result.status).toBe(true);
+    }
 
     let disabled: unknown;
     try {

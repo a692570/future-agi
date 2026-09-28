@@ -75,12 +75,13 @@ def test_open_world_hint_is_reviewed_catalog_metadata():
     tools = {tool["name"]: tool for tool in manifest["tools"]}
 
     external = {
-        name
-        for name, tool in tools.items()
-        if tool["annotations"]["openWorldHint"]
+        name for name, tool in tools.items() if tool["annotations"]["openWorldHint"]
     }
     assert external == {
         "run_prompt",
+        "add_dataset_prompt",
+        "update_dataset_prompt",
+        "create_scenario",
         "run_dataset_prompts",
         "run_dataset_evals",
         "test_evaluation",
@@ -253,34 +254,15 @@ def test_catalog_exposes_actual_pagination_and_typed_dataset_rows():
     assert {"page", "limit"} <= tools["list_prompt_versions"]["inputSchema"][
         "properties"
     ].keys()
-    for name in ["list_projects", "list_eval_groups"]:
-        assert (
-            tools[name]["inputSchema"]["properties"]["page_size"].get("maximum") is None
-        ), name
-    assert (
-        tools["list_test_executions"]["inputSchema"]["properties"]["limit"].get(
-            "maximum"
-        )
-        is None
-    )
-    assert (
-        tools["list_prompt_versions"]["inputSchema"]["properties"]["limit"].get(
-            "maximum"
-        )
-        is None
-    )
-    assert (
-        tools["list_gateway_request_logs"]["inputSchema"]["properties"]["limit"].get(
-            "maximum"
-        )
-        is None
-    )
-    assert (
-        tools["list_optimization_runs"]["inputSchema"]["properties"]["limit"].get(
-            "maximum"
-        )
-        is None
-    )
+    for name, field in [
+        ("list_projects", "page_size"),
+        ("list_eval_groups", "page_size"),
+        ("list_test_executions", "limit"),
+        ("list_prompt_versions", "limit"),
+        ("list_gateway_request_logs", "limit"),
+        ("list_optimization_runs", "limit"),
+    ]:
+        assert tools[name]["inputSchema"]["properties"][field]["maximum"] == 100
     assert tools["get_knowledge_base"]["request"]["path"] == "/model-hub/kb/{id}/"
     rows = Draft7Validator(tools["add_dataset_rows"]["inputSchema"])
     tool_id = "00000000-0000-0000-0000-000000000001"

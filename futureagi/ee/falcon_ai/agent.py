@@ -1042,11 +1042,14 @@ class AgentLoop:
                 "path_prefix": "/dashboard/simulate/test/",
                 "detail_path": "/dashboard/simulate/test/{id}",
             },
+            # Dashboards are routed at /dashboard/dashboards/:dashboardId, a
+            # sibling of observe rather than a child of it (see
+            # frontend/src/routes/sections/dashboard.jsx).
             "create_dashboard": {
                 "title": "Dashboard created",
                 "action_label": "Go to dashboard",
-                "path_prefix": "/dashboard/observe/",
-                "detail_path": "/dashboard/observe/dashboards/{id}",
+                "path_prefix": "/dashboard/dashboards/",
+                "detail_path": "/dashboard/dashboards/{id}",
             },
             "create_dashboard_widget": {
                 "title": "Widget added",

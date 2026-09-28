@@ -28,12 +28,21 @@ def test_core_and_common_tools_all_resolve():
     assert missing == []
 
 
+# Categories a specific mode offers that general/auto mode deliberately does
+# not: "web" is opt-in per mode, and "visualization" is Imagine-only (its
+# render_widget is kept out of general chat).
+MODE_ONLY_CATEGORIES = {"web", "visualization"}
+
+
 def test_every_mode_category_has_registered_tools():
     for category in ALL_CATEGORIES:
         assert registry.list_by_category(category), category
     for mode, config in MODES.items():
         for category in config["categories"]:
-            assert category in ALL_CATEGORIES or category == "web", (mode, category)
+            assert category in ALL_CATEGORIES or category in MODE_ONLY_CATEGORIES, (
+                mode,
+                category,
+            )
 
 
 def test_general_mode_mixes_catalog_and_native_tools():
@@ -49,11 +58,22 @@ def test_general_mode_mixes_catalog_and_native_tools():
     } <= names
     assert isinstance(registry.get("list_datasets"), GeneratedAPITool)
     # Natives with no API equivalent stay
-    assert {"search", "read_schema", "search_docs", "render_widget"} <= names
+    assert {"search", "read_schema", "search_docs"} <= names
+    # ...but not render_widget: it is Imagine-only, so "visualization" is not in
+    # ALL_CATEGORIES and general chat must not offer it.
+    assert "render_widget" not in names
+    assert registry.get("render_widget") is not None
     assert {"list_users", "create_api_key", "create_workspace"} <= names
     assert {"explore_trace_legacy", "read_trace_span", "analyze_error_cluster"} <= names
     # Nothing left from the retired proxy tools
     assert not {"add_columns", "get_cost_breakdown", "list_alert_monitors"} & names
+
+
+def test_imagine_mode_is_where_render_widget_is_offered():
+    """The other half of keeping render_widget out of general chat: Imagine is
+    the one mode that still offers it."""
+    assert detect_mode("imagine", "build me a widget") == "imagine"
+    assert "render_widget" in _names(load_tools_for_mode("imagine"))
 
 
 def test_tracing_mode_includes_error_feed_and_dashboards():

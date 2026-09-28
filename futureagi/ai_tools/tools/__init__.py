@@ -22,6 +22,9 @@ from ai_tools.tools.evaluations import evaluate_with_agent  # noqa: F401
 # Trace analysis pipeline and visualization (7)
 from ai_tools.tools.tracing import analyze_error_cluster  # noqa: F401
 from ai_tools.tools.tracing import analyze_project_traces  # noqa: F401
+# tracing/explore_trace.py now registers as ``explore_trace_legacy`` (the
+# Chauffeur read-all-spans + Haiku summary). The short name ``explore_trace``
+# belongs to the eval-context navigator in web/trace_explorer.py.
 from ai_tools.tools.tracing import explore_trace  # noqa: F401
 from ai_tools.tools.tracing import read_trace_span  # noqa: F401
 from ai_tools.tools.tracing import render_widget  # noqa: F401

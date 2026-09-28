@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_contract": "swagger.json",
-  "source_contract_sha256": "139b798c392ddb3c7a5e972e94c36e3ca0b83987e3573211bd466784387f33fe",
+  "source_contract_sha256": "83fe2c54b6fbda789c5a5040e90d216af3279ab24d431ffbcdf003356fd1f02b",
   "tool_count": 92,
   "tools": [
     {
@@ -202,7 +202,8 @@
           "page_size": {
             "type": "integer",
             "default": 10,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           },
           "current_page_index": {
             "type": "integer",
@@ -1008,7 +1009,7 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": false
+        "openWorldHint": true
       },
       "request": {
         "method": "POST",
@@ -1271,7 +1272,7 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": false
+        "openWorldHint": true
       },
       "request": {
         "method": "POST",
@@ -1423,7 +1424,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           },
           "modality": {
             "type": "array",
@@ -1526,7 +1529,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false,
@@ -3033,7 +3037,8 @@
           "page_size": {
             "type": "integer",
             "default": 10,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -3425,7 +3430,8 @@
           "page_size": {
             "type": "integer",
             "default": 20,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -3535,7 +3541,7 @@
             "type": "integer",
             "default": 30,
             "minimum": 1,
-            "maximum": 500
+            "maximum": 100
           },
           "cursor": {
             "type": "string",
@@ -3671,7 +3677,7 @@
             "type": "integer",
             "default": 30,
             "minimum": 1,
-            "maximum": 500
+            "maximum": 100
           },
           "cursor": {
             "type": "string",
@@ -3839,7 +3845,7 @@
             "type": "integer",
             "default": 30,
             "minimum": 1,
-            "maximum": 500
+            "maximum": 100
           },
           "cursor": {
             "type": "string",
@@ -3930,7 +3936,7 @@
             "type": "integer",
             "default": 30,
             "minimum": 1,
-            "maximum": 500
+            "maximum": 100
           }
         },
         "additionalProperties": false,
@@ -5056,7 +5062,7 @@
             "type": "integer",
             "default": 25,
             "minimum": 1,
-            "maximum": 200
+            "maximum": 100
           },
           "offset": {
             "type": "integer",
@@ -5160,7 +5166,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           },
           "status": {
             "type": "string"
@@ -5177,7 +5185,8 @@
           },
           "page_size": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -5270,7 +5279,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           },
           "status": {
             "type": "array",
@@ -5465,7 +5476,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -5962,7 +5975,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -6171,7 +6185,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -6284,7 +6299,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -6338,7 +6354,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -6407,7 +6424,8 @@
           "limit": {
             "type": "integer",
             "default": 30,
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false,
@@ -7766,7 +7784,7 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": false,
-        "openWorldHint": false
+        "openWorldHint": true
       },
       "request": {
         "method": "POST",
@@ -8370,7 +8388,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 100
           },
           "user_id": {
             "type": "string"
@@ -8580,7 +8599,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false
@@ -8841,7 +8862,9 @@
           },
           "limit": {
             "type": "integer",
-            "description": "Number of results to return per page."
+            "description": "Number of results to return per page.",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "additionalProperties": false,
@@ -9761,7 +9784,7 @@
           "page_size": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 200
+            "maximum": 100
           },
           "cursor_mode": {
             "type": "boolean",
@@ -9770,7 +9793,7 @@
           "cursor": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 16384
+            "maxLength": 262144
           }
         },
         "additionalProperties": false
@@ -9821,7 +9844,7 @@
           "property_id": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 1024,
+            "maxLength": 4113,
             "description": "Stable namespaced property identity returned by the metrics catalog. Legacy metric_name/metric_type remain accepted during migration."
           },
           "metric_name": {
@@ -9876,7 +9899,7 @@
           "cursor": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 16384
+            "maxLength": 262144
           },
           "attribute_type": {
             "type": "string",

@@ -24,6 +24,40 @@ class ToolGenerationError(ValueError):
     """Raised when the curated catalog cannot be generated safely."""
 
 
+def _apply_pagination_policy(
+    entry: dict[str, Any],
+    input_schema: dict[str, Any],
+    request_mapping: dict[str, list[str]],
+) -> None:
+    """Cap reviewed MCP page sizes without changing the REST contract.
+
+    Only a ceiling is applied. The policy deliberately cannot set a default:
+    every one of these endpoints already applies its own default page size when
+    the parameter is omitted, so injecting one here would silently resize pages
+    for MCP callers while claiming the REST contract is untouched.
+    """
+    policy = entry.get("pagination", {})
+    if not isinstance(policy, dict):
+        raise ToolGenerationError(f"Invalid pagination policy for {entry['name']}")
+    for field, bounds in policy.items():
+        schema = input_schema["properties"].get(field, {})
+        if (
+            field not in request_mapping["query"] + request_mapping["body"]
+            or schema.get("type") != "integer"
+            or not isinstance(bounds, dict)
+            or set(bounds) != {"maximum"}
+            or type(bounds["maximum"]) is not int
+            or bounds["maximum"] < 1
+        ):
+            raise ToolGenerationError(
+                f"Invalid pagination policy for {entry['name']}.{field}"
+            )
+        schema["minimum"] = max(1, schema.get("minimum", 1))
+        schema["maximum"] = min(
+            bounds["maximum"], schema.get("maximum", bounds["maximum"])
+        )
+
+
 def _load_document(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         if path.suffix in {".yaml", ".yml"}:
@@ -311,6 +345,7 @@ def generate_tool_manifest(contract_path: Path, catalog_path: Path) -> dict[str,
         input_schema, request_mapping = _build_input_schema(
             parameters, contract, method=method
         )
+        _apply_pagination_policy(entry, input_schema, request_mapping)
         annotations = _annotations(method, access)
         if "idempotent" in entry:
             if not isinstance(entry["idempotent"], bool):

@@ -27,7 +27,6 @@ const TOOL_GROUP_ICONS = {
   agents: "ph:robot-bold",
   simulation: "ph:waveform-bold",
   prompts: "ph:chat-text-bold",
-  users: "ph:users-bold",
   usage: "ph:chart-line-up-bold",
   gateway: "ph:plugs-bold",
   dashboards: "ph:squares-four-bold",
@@ -98,12 +97,6 @@ const DEFAULT_TOOL_GROUPS = [
       "Manage prompt templates, versions, labels, folders, simulations, and evaluations",
   },
   {
-    id: "users",
-    name: "Users & Workspaces",
-    description:
-      "User management, workspace operations, organization settings, and API key management",
-  },
-  {
     id: "usage",
     name: "Usage & Costs",
     description: "Cost analytics and billing information",
@@ -147,7 +140,10 @@ export function normalizeMCPEnabledGroups(config, toolGroups) {
     config?.enabled_groups ||
     config?.enabled_tool_groups;
 
-  if (Array.isArray(explicit)) return explicit;
+  const availableIds = new Set(toolGroups.map((group) => group.id));
+  if (Array.isArray(explicit)) {
+    return explicit.filter((id) => availableIds.has(id));
+  }
 
   const availableGroups = Array.isArray(toolConfig.available_groups)
     ? toolConfig.available_groups
@@ -156,7 +152,7 @@ export function normalizeMCPEnabledGroups(config, toolGroups) {
     return availableGroups
       .filter((group) => group.enabled || group.checked)
       .map((group) => group.slug || group.id)
-      .filter(Boolean);
+      .filter((id) => availableIds.has(id));
   }
 
   return toolGroups.map((group) => group.id);
