@@ -1372,7 +1372,9 @@ class ObservabilityService:
 
         Args:
             raw_log: Raw call log from the provider
-            provider: One of ProviderChoices.VAPI or ProviderChoices.RETELL
+            provider: The call root's provider label. It is resolved with
+                ``resolve_voice_provider``, so an LLM provider or an unknown
+                label falls back to ``gen_ai.system``, then to Vapi.
             span_attributes: Optional ObservationSpan.span_attributes. When
                 provided, the canonical recording URLs from the span (which
                 may be FAGI-S3-rehosted) override the provider URLs read from
@@ -1380,9 +1382,6 @@ class ObservabilityService:
 
         Returns:
             VoiceCallLogs object containing processed call logs
-
-        Raises:
-            ValueError: If provider is not recognized
         """
         if not raw_log:
             # OTLP export drops raw_log; rebuild the call-log shape from the span's call.* attrs.

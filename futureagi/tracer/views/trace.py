@@ -2200,9 +2200,7 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
 
             # Raw provider payload if present (collector ships it as JSON string)
             raw_log = span_raw_log(attrs)
-            provider = ObservabilityService.resolve_voice_provider(
-                trace.provider, attrs
-            )
+            provider = trace.provider or "vapi"
 
             processed_log = ObservabilityService.process_raw_logs(
                 raw_log, provider, span_attributes=attrs
