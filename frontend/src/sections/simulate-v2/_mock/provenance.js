@@ -257,3 +257,15 @@ export const buildRecord = (env) => {
     ],
   };
 };
+
+/**
+ * The rules that grade a run: the ones read with certainty, plus any held
+ * rule a person confirmed. Recorded on each run so a later confirmation
+ * doesn't make two runs graded by different rules look like the same test.
+ */
+export const gradedRuleIds = (env, envState) => {
+  const confirmed = envState?.confirmedRules || [];
+  return provenanceFor(env).rules
+    .filter((r) => !r.held || confirmed.includes(r.id))
+    .map((r) => r.id);
+};

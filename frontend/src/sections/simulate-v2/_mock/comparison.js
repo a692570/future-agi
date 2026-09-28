@@ -20,6 +20,7 @@ import { runEnvVersion, runInputs } from "./toolFit";
 import { attribute, domainTally, isMeasured, faultReason } from "./failures";
 import { episodeReturn } from "./reward";
 import { checklistSteps } from "./callDetail";
+import { ensureProvenance } from "./scenarioProvenance";
 
 /**
  * Colours for run identity.
@@ -679,12 +680,29 @@ export const buildComparison = (env, envState, runIds) => {
   const envVersions = [...new Set(runs.map((r) => r.envVersion).filter(Boolean))];
   const graderKey = (r) => JSON.stringify((r.evals || envState?.evals || []).map((e) => (typeof e === "string" ? e : `${e.id}:${e.threshold ?? ""}`)).sort());
   const graderSets = new Set(runs.map(graderKey));
+  /* The rules each run was graded by. Runs recorded before rules were kept
+     have nothing to compare, so they don't count against the rest. */
+  const ruleSets = new Set(runs.filter((r) => Array.isArray(r.rules)).map((r) => JSON.stringify([...r.rules].sort())));
+  /* Scenarios that are not in every run — most often a batch added between
+     them. The headline rate already reads only the shared ones; this says so. */
+  const notInAll = rows.filter((r) => r.missing);
+  const scenarioById = new Map((envState?.scenarios || []).map((sc) => [sc.id, ensureProvenance(sc)]));
+  const firstStart = Math.min(...runs.map((r) => Date.parse(r.startedAt || r.finishedAt || "") || Infinity));
+  const addedAfterFirst = notInAll.filter((r) => {
+    const at = Date.parse(scenarioById.get(r.id)?.addedAt || "");
+    return Number.isFinite(at) && at > firstStart;
+  }).length;
   const coverage = {
     total: rows.length,
     shared,
     common: common.length,
     envVersions,
     sameGraders: graderSets.size <= 1,
+    sameRules: ruleSets.size <= 1,
+    /* How many scenarios were not in every run, and how many of those were
+       added after the earliest run started. */
+    notInAll: notInAll.length,
+    addedBetween: addedAfterFirst,
     toolGapRuns: runs.filter((r) => r.toolGap?.length).map((r) => r.id),
     partial: rows.length - shared,
     /* Rows where at least one run produced no verdict at all. */

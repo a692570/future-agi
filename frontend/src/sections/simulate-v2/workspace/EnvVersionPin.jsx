@@ -5,6 +5,7 @@ import { Box, Stack, Typography, Menu } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { environmentVersions, currentEnvVersion } from "../_mock/versions";
 import { INVALIDATING } from "../_mock/proofs";
+import { scenariosInEnvVersion } from "../_mock/toolFit";
 
 const ACCENT = "#7857FC";
 
@@ -121,7 +122,7 @@ export default function EnvVersionPin({ env, envState, patch, readOnly = false }
                       {v.note}
                     </Typography>
                     <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25, fontVariantNumeric: "tabular-nums" }}>
-                      {[...changed, `${v.scenarios} scenarios`].join(" · ")}
+                      {[...changed, `${scenariosInEnvVersion(envState, v.label).length} scenarios`].join(" · ")}
                     </Typography>
                   </Box>
                 </Stack>

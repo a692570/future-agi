@@ -9,7 +9,7 @@ import Iconify from "src/components/iconify";
 import { alpha } from "@mui/material/styles";
 import { PersonaBadge } from "../components/primitives";
 import { generatedPool } from "../_mock/scenarios";
-import { staleScenarios, proofStatus, autoReprove, brokenScenarios, markEdited } from "../_mock/proofs";
+import { staleScenarios, proofStatus, autoReprove, brokenScenarios, brokenOn, markEdited } from "../_mock/proofs";
 import { subTasksFor } from "../_mock/contract";
 import ScenarioDetail from "../components/ScenarioDetail";
 import CoverageMatrix from "./scenarios/CoverageMatrix";
@@ -17,6 +17,7 @@ import AddScenariosDrawer from "./scenarios/AddScenariosDrawer";
 import ScenarioEditor from "./scenarios/ScenarioEditor";
 import { BatchContainers, BatchHistoryPanel, AsOfBanner } from "./scenarios/BatchDesigns";
 import { batchesFrom } from "./scenarios/batchDesignModel";
+import { stampNewBatch, unanswerableNote } from "../_mock/addScenarios";
 import SelectionBar from "./scenarios/SelectionBar";
 import { PickRouteIllustration } from "./scenarios/RouteThumbs";
 import {
@@ -26,7 +27,7 @@ import {
   getScenarioSelection,
 } from "../_mock/scenarioSelectionBus";
 import { injectComposerScaffold } from "../_mock/composerScaffoldBus";
-import { stampProvenance, defaultBatchId, ensureProvenance, sourceOf, groupByBatch } from "../_mock/scenarioProvenance";
+import { ensureProvenance, sourceOf, groupByBatch } from "../_mock/scenarioProvenance";
 
 /* AddScenariosDrawer emits `route` ids (twin | production | dataset |
    script); provenance vocab is different, so translate at the boundary. */
@@ -38,7 +39,7 @@ const SOURCE_MAP = {
   generate: "derived",
 };
 import { FilterPanel } from "src/components/filter-panel";
-import { currentAgentVersion, currentEnvVersion } from "../_mock/versions";
+import { currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
 import { agentToolsFor, knownToolsFor, requiredToolsOf, worldToolsFor } from "../_mock/toolFit";
 import { needsAttention, scenarioStatus } from "../_mock/scenarioStatus";
 import SideDrawer from "../components/SideDrawer";
@@ -177,7 +178,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      covers. */
   const statusFacets = (r) => {
     const ids = [];
-    if (r.provedBroke) ids.push("Broken");
+    if (brokenOn(r, currentEnvVersion(env, envState).label)) ids.push("Broken");
     if (r.critical) ids.push("Critical");
     if (proofStatus(r, env, envState).edited) ids.push("Edited");
     return ids;
@@ -286,30 +287,16 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
          drawer passes something we don't recognise, fall back to
          manual (the honest thing to say when a human clicked add). */
       const stampSource = SOURCE_MAP[source] || "manual";
-      const stampAt = new Date().toISOString();
-      const batchId = defaultBatchId(stampSource, stampAt);
-      /* A new scenario is proved against the world it is added to, and says
-         which tools it needs — so one that needs a tool this world can't
-         answer is caught now, not scored wrongly later. */
-      const envLabel = currentEnvVersion(env, envState).label;
-      const known = knownToolsFor(env, envState);
-      const answers = new Set(worldToolsFor(env, envState).map((t) => t.name));
-      const fresh2 = fresh.map((r) => ({
-        ...stampProvenance(r, { source: stampSource, at: stampAt, batchId }),
-        requiredTools: requiredToolsOf(r, known),
-        provedAgainst: r.provedAgainst || envLabel,
-        provedAt: r.provedAt || stampAt,
-      }));
-      const unanswerable = [...new Set(fresh2.flatMap((r) => r.requiredTools.filter((t) => !answers.has(t))))];
+      /* A new scenario is proved against the world it is added to, says which
+         tools it needs, and records the environment version it was added
+         under — the same stamping every add route uses. */
+      const batch = stampNewBatch(fresh, { env, envState, source: stampSource });
+      const fresh2 = batch.rows;
       /* The environment's own source (how it was first populated) is not
          whichever add route was used last. */
       patch({ scenarios: [...selected, ...fresh2], ...(!envState.scenarioSource && { scenarioSource: source }) });
-      if (unanswerable.length) {
-        const n = fresh2.filter((r) => r.requiredTools.some((t) => !answers.has(t))).length;
-        enqueueSnackbar(
-          `${n} of these need ${unanswerable.join(", ")}, which environment ${envLabel} can't answer — they come back not measured until the environment is rebuilt.`,
-          { variant: "warning", autoHideDuration: 7000 },
-        );
+      if (batch.needing) {
+        enqueueSnackbar(unanswerableNote(batch), { variant: "warning", autoHideDuration: 7000 });
       }
       const base = fresh.length === 1
         ? "1 scenario added"
@@ -429,7 +416,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      world change actually invalidated. `provedBroke` is stamped by
      `autoReprove` and stays on the scenario until the user edits/removes
      it, so this is stable across renders. */
-  const broken = buildMode ? [] : brokenScenarios(selected);
+  const broken = buildMode ? [] : brokenScenarios(selected, env, envState);
 
   /* Auto re-prove the moment we notice drift. Every scenario whose proof
      still holds gets restamped to the current env version; the ~20% that
@@ -439,8 +426,11 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
   const autoRunRef = useRef(null);
   useEffect(() => {
     if (buildMode) return;
-    if (stale.length === 0) return;
-    const key = `${env.id}::${envState?.activeEnvVersion || "v1"}::${stale.length}`;
+    /* Forget the last pass once nothing is stale, so coming back to a version
+       re-proves again — keyed on the count alone, a return visit with the
+       same number of stale rows was skipped and stayed "Needs re-proof". */
+    if (stale.length === 0) { autoRunRef.current = null; return; }
+    const key = `${env.id}::${envState?.activeEnvVersion || "v1"}::${stale.map((s) => s.id).join(",")}`;
     if (autoRunRef.current === key) return;
     autoRunRef.current = key;
     patch({ scenarios: autoReprove(selected, env, envState) });
@@ -872,6 +862,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                   <BatchHistoryPanel
                     batches={history}
                     runs={(envState.runs || []).filter((r) => !r.synthetic)}
+                    versions={environmentVersions(env, envState)}
                     total={selected.length}
                     asOf={asOfBatch ? asOf : null}
                     onPick={pick}

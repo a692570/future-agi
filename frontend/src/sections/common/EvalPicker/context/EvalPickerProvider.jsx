@@ -47,6 +47,9 @@ const EvalPickerProvider = ({
   multiSelect = false,
   selectedIds = null,
   onToggleSelect = null,
+  // Opt-in "Added evals" section: the evals already on the caller, listed
+  // in their own collapsible box instead of as disabled rows in the list.
+  addedEvals = null,
 }) => {
   const [step, setStep] = useState(initialEval ? "config" : "list");
   const [selectedEval, setSelectedEvalState] = useState(
@@ -110,6 +113,7 @@ const EvalPickerProvider = ({
         multiSelect,
         selectedIds,
         onToggleSelect,
+        addedEvals,
         sourceFilters,
         onFiltersChange,
         sourceTimeWindow,
@@ -122,6 +126,7 @@ const EvalPickerProvider = ({
 };
 
 EvalPickerProvider.propTypes = {
+  addedEvals: PropTypes.array,
   multiSelect: PropTypes.bool,
   selectedIds: PropTypes.object,
   onToggleSelect: PropTypes.func,

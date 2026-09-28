@@ -16,6 +16,7 @@ import { environmentVersions, nextEnvVersion, ENV_CHANGES } from "../_mock/versi
 import { INVALIDATING, staleScenarios } from "../_mock/proofs";
 import { twinById, resolveSeedPromptToJson } from "../_mock/twins";
 import TwinLogo from "./../components/TwinLogo";
+import { scenariosInEnvVersion } from "../_mock/toolFit";
 
 const TWIN_TINT = "#7857FC";
 
@@ -401,7 +402,7 @@ export default function SettingsPanel({ env, envState, patch, onDelete }) {
                     )}
                   </Stack>
                   <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                    {new Date(v.createdAt).toLocaleDateString()} · {v.scenarios} scenarios
+                    {new Date(v.createdAt).toLocaleDateString()} · {scenariosInEnvVersion(envState, v.label).length} scenarios
                   </Typography>
                 </Box>
                 {/*

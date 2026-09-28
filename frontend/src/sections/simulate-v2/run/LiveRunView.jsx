@@ -24,6 +24,7 @@ import {
 import { ProvisioningPanel } from "../components/loading";
 import useRunPlayer from "./useRunPlayer";
 import Stage from "./stages";
+import { gradedRuleIds } from "../_mock/provenance";
 
 /**
  * The live run.
@@ -271,6 +272,9 @@ export default function LiveRunView() {
       /* The graders applied when it ran — a later eval change must not
          regrade history. */
       evals: envState.evals,
+      /* And the rules that graded it — confirming a held rule later changes
+         the test, and Compare needs to be able to say so. */
+      rules: gradedRuleIds(env, envState),
       /* And the cast of actors it ran with. */
       actors: inputs.actors.map((a) => a.id),
       scenarioIds: scenarios.map((sc) => sc.id),

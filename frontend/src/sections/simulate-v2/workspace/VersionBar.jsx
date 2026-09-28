@@ -3,6 +3,7 @@ import { alpha } from "@mui/material/styles";
 import { Box, Stack, Typography, Button, Tooltip } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { currentEnvVersion, currentAgentVersion } from "../_mock/versions";
+import { scenariosInEnvVersion } from "../_mock/toolFit";
 
 /**
  * What is being tested, against what.
@@ -27,6 +28,10 @@ import { currentEnvVersion, currentAgentVersion } from "../_mock/versions";
  */
 export default function VersionBar({ env, envState }) {
   const envV = currentEnvVersion(env, envState);
+  /* Counted live from the pinned version — not the number stored when the
+     version was minted, which went stale with every batch added after it
+     (and read "undefined" on versions that never stored one). */
+  const scenarioCount = scenariosInEnvVersion(envState, envV.label).length;
   const agentV = currentAgentVersion(envState);
 
   return (
@@ -68,7 +73,7 @@ export default function VersionBar({ env, envState }) {
 
       <Tooltip arrow title="Scenarios belong to the environment, so the same set runs against any agent version">
         <Typography sx={{ typography: "s3", color: "text.subtitle", cursor: "default" }}>
-          {envV.scenarios} scenarios, shared across agent versions
+          {`${scenarioCount} scenario${scenarioCount === 1 ? "" : "s"}, shared across agent versions`}
         </Typography>
       </Tooltip>
 

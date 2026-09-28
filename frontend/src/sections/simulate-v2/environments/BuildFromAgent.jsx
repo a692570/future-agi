@@ -24,8 +24,9 @@ import { ADAPTERS } from "../_mock/rlContract";
 import { generatedPool } from "../_mock/scenarios";
 import { agentPromptOf } from "../_mock/agentPrompt";
 import AgentPromptDrawer from "../workspace/agents/AgentPromptDrawer";
-import { stampProvenance as provStamp, defaultBatchId as provDefaultBatchId, currentUser } from "../_mock/scenarioProvenance";
+import { stampProvenance as provStamp, currentUser } from "../_mock/scenarioProvenance";
 import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
+import { stampNewBatch, unanswerableNote } from "../_mock/addScenarios";
 import { parseCurl, describeFill } from "../_mock/curl";
 import { detectEndpoints, CONFIDENCE } from "../_mock/endpoints";
 import AssistantConsole from "../assistant/AssistantConsole";
@@ -354,24 +355,21 @@ export default function BuildFromAgent() {
       const existing = new Set((envState?.scenarios || []).map((s) => s.id));
       const pool = generatedPool(env).filter((s) => !existing.has(s.id));
       const fresh = pool.slice(0, intent.count);
+      /* Stamped like every other add route — tools, proof, the environment
+         version it was added under — so the tool check runs here too. */
+      const batch = stampNewBatch(fresh, { env, envState, source: "builder-chat", actor: currentUser() });
       if (fresh.length > 0) {
-        const at = new Date().toISOString();
-        const batchId = provDefaultBatchId("builder-chat", at);
-        const stamped = fresh.map((r) => provStamp(r, {
-          source: "builder-chat",
-          actor: { kind: "user", id: "u_vel", name: "Vel", email: "velalagan@futureagi.com" },
-          at, batchId,
-        }));
-        envPatch({ scenarios: [...(envState?.scenarios || []), ...stamped] });
+        envPatch({ scenarios: [...(envState?.scenarios || []), ...batch.rows] });
       }
+      const warn = fresh.length > 0 ? unanswerableNote(batch) : null;
       setTurns((prev) => [...prev, {
         id: `a-${Date.now()}`,
         role: "assistant",
         steps: [{ kind: "note", text: fresh.length === 0
           ? "This environment has already used every derived scenario in the pool — delete a few first, or connect a fresh source."
           : fresh.length < intent.count
-            ? `Added ${fresh.length} scenarios as a new batch — the derivation pool only had ${fresh.length} unused left.`
-            : `Added ${fresh.length} scenarios as a new batch on the Scenarios tab.` }],
+            ? `Added ${fresh.length} scenarios as a new batch — the derivation pool only had ${fresh.length} unused left.${warn ? ` ${warn}` : ""}`
+            : `Added ${fresh.length} scenarios as a new batch on the Scenarios tab.${warn ? ` ${warn}` : ""}` }],
       }]);
       return;
     }

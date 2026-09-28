@@ -285,6 +285,8 @@ const EvalPickerContent = ({
  * @param {Array} sourceColumns - Available columns for variable auto-mapping
  * @param {function} onEvalAdded - Called with the configured eval object when user saves
  * @param {Array} existingEvals - Already-added evals (to disable re-adding)
+ * @param {Array} addedEvals - Opt-in: already-added evals ({ id, name, meta })
+ *   shown in a collapsible "Added evals" section and left out of the list
  * @param {string} drawerType - MUI Drawer variant: "temporary" (default) or "persistent"
  * @param {number|string} width - Drawer width (default: 700px)
  */
@@ -333,6 +335,7 @@ const EvalPickerDrawer = ({
   multiSelect = false,
   selectedIds = null,
   onToggleSelect = null,
+  addedEvals = null,
   headerAction = null,
   // Rendered inside the config step's header / primary button when a caller
   // is stepping through several evals.
@@ -404,6 +407,7 @@ const EvalPickerDrawer = ({
         multiSelect={multiSelect}
         selectedIds={selectedIds}
         onToggleSelect={onToggleSelect}
+        addedEvals={addedEvals}
       >
         <EvalPickerContent
           onStepChange={setCurrentStep}
@@ -418,6 +422,7 @@ const EvalPickerDrawer = ({
 };
 
 EvalPickerDrawer.propTypes = {
+  addedEvals: PropTypes.array,
   paperSx: PropTypes.object,
   multiSelect: PropTypes.bool,
   selectedIds: PropTypes.object,

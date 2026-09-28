@@ -342,6 +342,8 @@ export function buildRun({
   actors = [],
   repeats = 3,
   phrasing = 0,
+  /* The environment version the run is on. */
+  envVersion = null,
 }) {
   const answers = new Set(tools.map((t) => t.name));
   const gapTools = (agentTools || []).filter((t) => !answers.has(t.name));
@@ -413,7 +415,7 @@ export function buildRun({
     if (reached) {
       fault.environment = `The agent called ${reached.name}, which this world can't answer — nothing came back, so the scenario can't be scored.`;
       fault.toolGap = reached.name;
-    } else if (sc.provedBroke) {
+    } else if (sc.provedBroke && (!sc.brokeAgainst || !envVersion || sc.brokeAgainst === envVersion)) {
       fault.environment = "This scenario no longer stages on this world — its proof broke when the environment changed. Re-prove it before reading a verdict.";
     } else if (!admission.admitted) {
       fault.environment = `Quarantined — ${admission.reason}`;

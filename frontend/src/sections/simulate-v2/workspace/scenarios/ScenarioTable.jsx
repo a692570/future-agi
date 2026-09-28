@@ -408,7 +408,7 @@ export default function ScenarioTable({
                         </Box>
                       </Tooltip>
                     )}
-                    {row.provedBroke && (
+                    {row.provedBroke && (!row.brokeAgainst || !envVersion || row.brokeAgainst === envVersion) && (
                       <Tooltip arrow title="Broke when the env changed — the proof no longer holds.">
                         <Box
                           sx={{

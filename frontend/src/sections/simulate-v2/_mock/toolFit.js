@@ -245,6 +245,8 @@ export const scenariosInEnvVersion = (envState, envLabel) => (envState?.scenario
  * watched are the numbers the run keeps.
  */
 export const runInputs = (env, envState, { agent, envVersion, actors }) => ({
+  /* The world the run is on — a scenario's "broken" is about one world. */
+  envVersion: envVersion || currentEnvVersion(env, envState)?.label,
   tools: worldToolsFor(env, envState, envVersion),
   agentTools: agentToolsFor(env, envState, agent),
   failRate: agentFailRate(agent),

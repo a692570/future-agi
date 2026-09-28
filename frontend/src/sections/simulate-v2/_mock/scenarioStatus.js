@@ -9,7 +9,7 @@
  *
  *   broken        the world changed and the scenario no longer stages
  *   quarantined   it can't be proved (no outcome, no checks …)
- *   needs-env     a later rebuild added it; not part of the pinned version
+ *   needs-env     added on a later environment version; not part of the pinned one
  *   no-tool       it needs a tool this world can't answer
  *   stale         proved on an older world (or edited since) — re-prove
  *   proved        fine, on the pinned version
@@ -38,7 +38,7 @@ export const STATUS_META = {
  */
 export const scenarioStatus = (row, ctx) => {
   const { env, envState, envVersion, answers, buildMode } = ctx;
-  if (row?.provedBroke) {
+  if (row?.provedBroke && (!row.brokeAgainst || !envVersion || row.brokeAgainst === envVersion)) {
     return { id: "broken", ...STATUS_META.broken, detail: "It no longer stages on this world since the environment changed. Re-prove or edit it." };
   }
   const admission = admissionOf(row);
@@ -50,7 +50,9 @@ export const scenarioStatus = (row, ctx) => {
       id: "needs-env",
       ...STATUS_META["needs-env"],
       label: `Needs env ${row.addedInEnv}`,
-      detail: `Added when environment ${row.addedInEnv} learned ${row.newTool || "a new tool"}. Runs on ${envVersion} leave it out.`,
+      detail: row.newTool
+        ? `Added when environment ${row.addedInEnv} learned ${row.newTool}. Runs on ${envVersion} leave it out.`
+        : `Added on environment ${row.addedInEnv}, after ${envVersion}. Runs on ${envVersion} leave it out.`,
     };
   }
   const missing = answers ? (row?.requiredTools || []).filter((t) => !answers.has(t)) : [];

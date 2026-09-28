@@ -248,6 +248,18 @@ export default function CompareRuns() {
       notes.push(`These runs used environments ${envs.join(" and ")}, so part of the difference is the environment, not the agent.`);
     }
     if (!comparison.coverage.sameGraders) notes.push("They were graded by different evaluations.");
+    if (comparison.coverage.sameRules === false) {
+      notes.push("They were graded by different rules — a rule read from the source was confirmed or dropped between them.");
+    }
+    /* A batch added between runs changes the test without changing the
+       environment version, so it has to be said here too. */
+    const { notInAll = 0, addedBetween = 0, common = 0 } = comparison.coverage;
+    if (notInAll > 0) {
+      const plural = (n) => `${n} scenario${n === 1 ? " was" : "s were"}`;
+      notes.push(addedBetween > 0
+        ? `${plural(addedBetween)} added after the first of these runs, so not every run had ${addedBetween === 1 ? "it" : "them"} — pass rates compare the ${common} they all share.`
+        : `${plural(notInAll)} not in every run — pass rates compare the ${common} they all share.`);
+    }
     if (comparison.coverage.toolGapRuns?.length) {
       notes.push(`${comparison.coverage.toolGapRuns.length === 1 ? "One run was" : "Some runs were"} run anyway on a world that can't answer every tool — those scenarios are not measured.`);
     }
@@ -345,14 +357,18 @@ export default function CompareRuns() {
                 world did that number come from". Env part is muted so
                 the label stays scannable when both are the same.
               */}
-              <Typography noWrap sx={{ typography: "s3", fontWeight: 600, maxWidth: 180 }}>
+              <Typography noWrap sx={{ typography: "s3", fontWeight: 600, maxWidth: 280 }}>
                 agent {r.agentVersion}
                 {r.envVersion && (
                   <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500 }}>
                     {" "}× env {r.envVersion}
                   </Box>
                 )}
-                {" "}· {r.passRate}%
+                {/* When the runs covered different scenarios, the pill reads the
+                    same shared set the summary does, and says so. */}
+                {comparison.coverage.notInAll > 0 && comparison.coverage.common > 0
+                  ? ` · ${r.sharedPassRate ?? "—"}% on ${comparison.coverage.common} shared`
+                  : ` · ${r.passRate}%`}
               </Typography>
               {i === 0 && <Typography sx={{ typography: "s3", color: "text.subtitle" }}>baseline</Typography>}
               {comparison.runs.length > 2 && (

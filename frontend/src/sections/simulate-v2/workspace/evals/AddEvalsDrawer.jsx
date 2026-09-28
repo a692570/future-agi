@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Box, Stack, Typography, Button, LinearProgress } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { EvalPickerDrawer } from "src/sections/common/EvalPicker";
-import { simulationPreviewData } from "../../_mock/evals";
+import { simulationPreviewData, resolveEval } from "../../_mock/evals";
 import { getAgentType } from "../../_mock/agentTypes";
 
 /**
@@ -35,6 +35,25 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
     [env, envState],
   );
   const selected = useMemo(() => Object.values(checked), [checked]);
+  /* The evals already on this environment, by name, for the picker's
+     "Added evals" section — so they sit in their own box instead of showing
+     as disabled rows scattered through the library. */
+  /* Callers pass ids, or (the run screen) the eval records themselves. */
+  const addedIds = useMemo(
+    () => [...(existingIds || [])].map((x) => (typeof x === "string" ? x : x?.id)).filter(Boolean),
+    [existingIds],
+  );
+  const addedEvals = useMemo(() => {
+    const byId = new Map((envState?.evals || []).map((e) => [typeof e === "string" ? e : e?.id, e]));
+    return addedIds.map((id) => {
+      const ev = resolveEval(byId.get(id) || id);
+      return {
+        id,
+        name: ev?.instanceName || ev?.name || id,
+        meta: [ev?.category, ev?.type].filter(Boolean).join(" · "),
+      };
+    });
+  }, [envState, addedIds]);
   const selectedIds = useMemo(() => new Set(Object.keys(checked)), [checked]);
 
   const reset = () => {
@@ -112,7 +131,8 @@ export default function AddEvalsDrawer({ open, onClose, env, envState, existingI
       // from develops/<dataset uuid>/get_evals_list/, and an environment id
       // isn't a dataset uuid, so the library came back empty.
       sourcePreviewData={previewData}
-      existingEvals={[...(existingIds || [])].map((id) => ({ id }))}
+      existingEvals={addedIds.map((id) => ({ id }))}
+      addedEvals={addedEvals}
       onEvalAdded={mapping ? onEvalAdded : (config) => { onAdd([entry(config)]); close(); }}
       initialEval={mapping ? queue[index] : null}
       // In a queue the drawer must not close itself after each save — this

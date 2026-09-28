@@ -5,6 +5,9 @@ import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import ScenarioTable from "./ScenarioTable";
 import { relativeTime, sourceOf } from "../../_mock/scenarioProvenance";
+import { ENV_CHANGES } from "../../_mock/versions";
+
+const ENV_CHANGE_LABEL = Object.fromEntries(ENV_CHANGES.map((c) => [c.id, c.label]));
 
 /**
  * How the Scenarios tab shows batches.
@@ -220,26 +223,28 @@ const historyRowSx = (selected, connect) => ({
   }),
 });
 
-/* A point on the history line — round for a batch, square for a run. */
-function HistoryDot({ square, active }) {
+/* A point on the history line — round for a batch, square for a run, a
+   diamond for a new environment version. */
+function HistoryDot({ square, diamond, active }) {
   return (
     <Box
       sx={{
-        width: 11, height: 11, borderRadius: square ? 0.5 : "50%", flexShrink: 0, mt: "4px",
-        border: "2px solid", borderColor: active ? "text.primary" : "text.disabled",
+        width: 11, height: 11, borderRadius: square || diamond ? 0.5 : "50%", flexShrink: 0, mt: "4px",
+        border: "2px solid", borderColor: active || diamond ? "text.primary" : "text.disabled",
         bgcolor: active ? "text.primary" : "background.paper", position: "relative", zIndex: 1,
+        ...(diamond && { transform: "rotate(45deg) scale(0.85)" }),
       }}
     />
   );
 }
-HistoryDot.propTypes = { square: PropTypes.bool, active: PropTypes.bool };
+HistoryDot.propTypes = { square: PropTypes.bool, diamond: PropTypes.bool, active: PropTypes.bool };
 
 /**
  * Every addition to the suite, and every run, on one timeline — newest
  * first; the header carries the suite's total. `batches` are the raw batch records
  * (newest first); `runs` carry a time and the scenarios they used.
  */
-export function BatchHistoryPanel({ batches, runs = [], total, asOf, onPick, onViewAsOf, onClose }) {
+export function BatchHistoryPanel({ batches, runs = [], versions = [], total, asOf, onPick, onViewAsOf, onClose }) {
   const [hover, setHover] = useState(null);
   const at = (iso) => Date.parse(iso || "") || 0;
   /* The newest batch at or before a moment — what a run was tested against. */
@@ -247,6 +252,9 @@ export function BatchHistoryPanel({ batches, runs = [], total, asOf, onPick, onV
   const entries = [
     ...batches.map((m) => ({ kind: "batch", id: m.batchId, t: at(m.addedAt), m })),
     ...runs.map((r, i) => ({ kind: "run", id: r.id, t: at(r.finishedAt || r.startedAt), r, no: i + 1 })),
+    /* Every environment version after the first — each one changes the test
+       every later run takes, so it sits on the same line as the runs. */
+    ...versions.filter((v) => v.label !== "v1" && at(v.createdAt)).map((v) => ({ kind: "version", id: `env-${v.label}`, t: at(v.createdAt), v })),
   ].sort((a, b) => b.t - a.t);
   const runNo = new Map([...runs].sort((a, b) => at(a.finishedAt || a.startedAt) - at(b.finishedAt || b.startedAt)).map((r, i) => [r.id, i + 1]));
 
@@ -284,6 +292,24 @@ export function BatchHistoryPanel({ batches, runs = [], total, asOf, onPick, onV
 
           {entries.map((e, idx) => {
             const connect = idx < entries.length - 1;
+            if (e.kind === "version") {
+              const changed = (e.v.changed || []).map((c) => ENV_CHANGE_LABEL[c]).filter(Boolean);
+              return (
+                <Stack key={e.id} direction="row" spacing={1.25} sx={{ ...historyRowSx(false, connect), cursor: "default", "&:hover": {} }}>
+                  <HistoryDot diamond />
+                  <Box minWidth={0} flex={1}>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{whenLabel(e.v.createdAt)}</Typography>
+                    <Typography sx={{ typography: "s2", fontWeight: 700 }}>{`Environment ${e.v.label}`}</Typography>
+                    <Typography sx={{ typography: "s3", color: "text.subtitle", mt: 0.25 }}>
+                      {[changed.join(" · "), e.v.note].filter(Boolean).join(" — ")}
+                    </Typography>
+                    <Typography sx={{ typography: "s3", color: "text.disabled", mt: 0.25 }}>
+                      {"Runs before and after this aren't the same test"}
+                    </Typography>
+                  </Box>
+                </Stack>
+              );
+            }
             if (e.kind === "run") {
               const seen = batchAt(e.r.startedAt || e.r.finishedAt);
               const n = e.r.scenarioIds?.length;
@@ -357,7 +383,7 @@ export function BatchHistoryPanel({ batches, runs = [], total, asOf, onPick, onV
   );
 }
 BatchHistoryPanel.propTypes = {
-  batches: PropTypes.array, runs: PropTypes.array, total: PropTypes.number, asOf: PropTypes.string,
+  batches: PropTypes.array, runs: PropTypes.array, versions: PropTypes.array, total: PropTypes.number, asOf: PropTypes.string,
   onPick: PropTypes.func, onViewAsOf: PropTypes.func, onClose: PropTypes.func,
 };
 

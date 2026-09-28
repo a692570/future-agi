@@ -17,6 +17,8 @@ import {
   Tooltip,
   Avatar,
   Skeleton,
+  Collapse,
+  ButtonBase,
   useTheme,
 } from "@mui/material";
 // date-fns available if needed for timestamps
@@ -480,12 +482,126 @@ const SkeletonRows = (
   </>
 );
 
+// ── Added evals ──
+
+/*
+  The evals already on the caller, in their own box under the category chips.
+  Collapsed by default with a count, so the list below is only what can still
+  be added and nothing reads as greyed-out or broken. A search that matches an
+  added eval opens the box and narrows it too — looking for an eval you already
+  have should say so, not come back empty.
+*/
+const AddedEvalsSection = ({ addedEvals, searchQuery }) => {
+  const [open, setOpen] = useState(false);
+  const q = (searchQuery || "").trim().toLowerCase();
+  const shown = q
+    ? addedEvals.filter((e) => `${e.name} ${e.meta || ""}`.toLowerCase().includes(q))
+    : addedEvals;
+  const matching = q && shown.length > 0;
+  const expanded = open || matching;
+
+  if (!addedEvals.length) return null;
+  return (
+    <Box
+      sx={{
+        flexShrink: 0,
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 1,
+        overflow: "hidden",
+      }}
+    >
+      <ButtonBase
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={expanded}
+        sx={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          px: 1.5,
+          py: 1,
+          justifyContent: "flex-start",
+          textAlign: "left",
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <Iconify
+          icon="solar:alt-arrow-right-linear"
+          width={14}
+          sx={{
+            color: "text.secondary",
+            transition: "transform 150ms",
+            transform: expanded ? "rotate(90deg)" : "none",
+          }}
+        />
+        <Iconify icon="solar:check-circle-linear" width={16} sx={{ color: "text.secondary" }} />
+        <Typography sx={{ fontSize: "13px", fontWeight: 600 }}>Added evaluations</Typography>
+        <Box
+          sx={{
+            px: 0.75,
+            height: 18,
+            minWidth: 18,
+            borderRadius: 0.75,
+            display: "grid",
+            placeItems: "center",
+            bgcolor: "action.selected",
+          }}
+        >
+          <Typography sx={{ fontSize: "11px", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+            {q ? `${shown.length}/${addedEvals.length}` : addedEvals.length}
+          </Typography>
+        </Box>
+      </ButtonBase>
+
+      <Collapse in={expanded} timeout={150} unmountOnExit>
+        <Box sx={{ borderTop: "1px solid", borderColor: "divider", maxHeight: 188, overflowY: "auto" }}>
+          {shown.length === 0 ? (
+            <Typography sx={{ px: 1.5, py: 1.25, fontSize: "12px", color: "text.secondary" }}>
+              None of the added evaluations match your search.
+            </Typography>
+          ) : shown.map((e, i) => (
+            <Box
+              key={e.id}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                px: 1.5,
+                py: 0.875,
+                borderTop: i ? "1px solid" : "none",
+                borderColor: "divider",
+              }}
+            >
+              <Iconify icon="solar:check-read-linear" width={14} sx={{ color: "success.main", flexShrink: 0 }} />
+              <Typography noWrap sx={{ fontSize: "13px", fontWeight: 500, minWidth: 0 }}>
+                {e.name}
+              </Typography>
+              <Box sx={{ flex: 1 }} />
+              {e.meta && (
+                <Typography noWrap sx={{ fontSize: "12px", color: "text.secondary", flexShrink: 0 }}>
+                  {e.meta}
+                </Typography>
+              )}
+            </Box>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+AddedEvalsSection.propTypes = {
+  addedEvals: PropTypes.array.isRequired,
+  searchQuery: PropTypes.string,
+};
+
 // ── Main Component ──
 
 const EvalPickerList = ({ onSelectEval }) => {
   const {
     existingEvals, source, sourceId, lockedFilters,
-    multiSelect, selectedIds, onToggleSelect,
+    multiSelect, selectedIds, onToggleSelect, addedEvals,
   } = useEvalPickerContext();
   const useScopedEvals = source === "dataset" || source === "experiment";
   const {
@@ -522,6 +638,20 @@ const EvalPickerList = ({ onSelectEval }) => {
           e["templateId"] === evalId,
       ),
     [existingEvals],
+  );
+
+  /* With the "Added evals" section on, added evals live there and are left
+     out of the list — matched by id, or by name for library evals the caller
+     only knows by name. */
+  const addedNames = useMemo(
+    () => new Set((addedEvals || []).map((e) => String(e.name || "").toLowerCase())),
+    [addedEvals],
+  );
+  const listItems = useMemo(
+    () => (Array.isArray(addedEvals)
+      ? items.filter((e) => !isAlreadyAdded(e.id) && !addedNames.has(String(e.name || "").toLowerCase()))
+      : items),
+    [items, addedEvals, addedNames, isAlreadyAdded],
   );
 
   const activeFilterCount = useMemo(() => {
@@ -707,6 +837,10 @@ const EvalPickerList = ({ onSelectEval }) => {
         ) : null}
       </Box>
 
+      {Array.isArray(addedEvals) && (
+        <AddedEvalsSection addedEvals={addedEvals} searchQuery={searchQuery} />
+      )}
+
       {/* Scrollable Table */}
       <TableContainer sx={{ flex: 1, overflow: "auto", minHeight: 0 }}>
         <Table size="small" stickyHeader sx={{ tableLayout: "fixed" }}>
@@ -749,7 +883,7 @@ const EvalPickerList = ({ onSelectEval }) => {
           <TableBody>
             {isLoading ? (
               <SkeletonRows />
-            ) : items.length === 0 ? (
+            ) : listItems.length === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={multiSelect ? 8 : 7}
@@ -760,7 +894,7 @@ const EvalPickerList = ({ onSelectEval }) => {
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((evalItem) => {
+              listItems.map((evalItem) => {
                 const isExpanded = expandedEvalId === evalItem.id;
                 const added = isAlreadyAdded(evalItem.id);
                 const createdBy = evalItem.created_by_name || "Unknown";

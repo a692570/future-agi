@@ -15,7 +15,17 @@
  * the failure this file exists to make visible.
  */
 
-import { environmentVersions, currentEnvVersion } from "./versions";
+import { environmentVersions, currentEnvVersion, versionNumber } from "./versions";
+
+/* A scenario added on a later environment version isn't part of an older
+   pinned one — nothing to prove, and nothing to break, until that version
+   is pinned again. */
+const laterThan = (s, label) => !!(s?.addedInEnv && label && versionNumber(s.addedInEnv) > versionNumber(label));
+
+/* "Broken" is a statement about one world. A scenario that broke on v1 is
+   not broken on v3, where it was proved; older records carry no version and
+   keep counting everywhere, as they always did. */
+export const brokenOn = (s, label) => !!(s?.provedBroke && (!s.brokeAgainst || s.brokeAgainst === label));
 
 /**
  * What kind of change can invalidate a proof.
@@ -109,6 +119,11 @@ export const proofStatus = (row, env, envState) => {
   if (proved === current.label) {
     return { proved, current: current.label, stale: false, reasons: [], since: [] };
   }
+  /* Proved on this version before — going to look at an older version and
+     coming back doesn't make it unproven here. */
+  if ((row?.provedOn || []).includes(current.label)) {
+    return { proved: current.label, current: current.label, stale: false, reasons: [], since: [] };
+  }
 
   /*
     What separates the two worlds, in whichever direction. Proved on an older
@@ -131,8 +146,18 @@ export const proofStatus = (row, env, envState) => {
 };
 
 /** The scenarios whose proof the world has outgrown. */
-export const staleScenarios = (scenarios = [], env, envState) =>
-  scenarios.filter((s) => proofStatus(s, env, envState).stale);
+export const staleScenarios = (scenarios = [], env, envState) => {
+  const label = currentEnvVersion(env, envState).label;
+  return scenarios.filter((s) => !laterThan(s, label) && proofStatus(s, env, envState).stale);
+};
+
+/*
+  Every version a scenario has been proved on. An edit makes the old proofs
+  about different words, so it starts the list over.
+*/
+const nextProvedOn = (s, env, envState, label) => (editedSinceProof(s)
+  ? [label]
+  : [...new Set([...(s.provedOn || [provedAgainst(s, env, envState)]).filter(Boolean), label])]);
 
 /**
  * Re-proving is a claim about the current world *and* about the scenario as it
@@ -142,6 +167,7 @@ export const staleScenarios = (scenarios = [], env, envState) =>
 export const reproved = (scenarios = [], env, envState) =>
   scenarios.map((s) => ({
     ...s,
+    provedOn: nextProvedOn(s, env, envState, currentEnvVersion(env, envState).label),
     provedAgainst: currentEnvVersion(env, envState).label,
     provedAt: new Date().toISOString(),
     provedBroke: false,
@@ -178,6 +204,7 @@ export const autoReprove = (scenarios = [], env, envState) => {
   const currentLabel = currentEnvVersion(env, envState).label;
   const now = new Date().toISOString();
   return scenarios.map((s) => {
+    if (laterThan(s, currentLabel)) return s;
     const status = proofStatus(s, env, envState);
     if (!status.stale) return s;
     const roll = seededFraction(`${s.id}::${currentLabel}`);
@@ -185,6 +212,7 @@ export const autoReprove = (scenarios = [], env, envState) => {
     if (stillWorks) {
       return {
         ...s,
+        provedOn: nextProvedOn(s, env, envState, currentLabel),
         provedAgainst: currentLabel,
         provedAt: now,
         provedBroke: false,
@@ -204,5 +232,7 @@ export const autoReprove = (scenarios = [], env, envState) => {
 };
 
 /** The subset of scenarios that auto-re-prove has flagged as no longer working. */
-export const brokenScenarios = (scenarios = []) =>
-  scenarios.filter((s) => s.provedBroke);
+export const brokenScenarios = (scenarios = [], env, envState) => {
+  const label = env ? currentEnvVersion(env, envState).label : null;
+  return scenarios.filter((s) => (label ? brokenOn(s, label) : s.provedBroke));
+};

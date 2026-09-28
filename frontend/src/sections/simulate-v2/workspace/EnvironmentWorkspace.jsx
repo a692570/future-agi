@@ -10,8 +10,9 @@ import { CustomTabs } from "src/components/tabs/tabs";
 import { paths } from "src/routes/paths";
 import { protoRunId } from "../_mock/executionAdapter";
 import { generatedPool } from "../_mock/scenarios";
-import { stampProvenance, defaultBatchId } from "../_mock/scenarioProvenance";
 import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
+import { stampNewBatch, unanswerableNote } from "../_mock/addScenarios";
+import { currentUser } from "../_mock/scenarioProvenance";
 import { getEnvironment } from "../_mock/environments";
 import { getSurface } from "../_mock/surfaces";
 import { BOOT_STEPS } from "../_mock/runStream";
@@ -553,20 +554,18 @@ export default function EnvironmentWorkspace() {
           }]);
           return;
         }
-        const at = new Date().toISOString();
-        const batchId = defaultBatchId("builder-chat", at);
-        const stamped = fresh.map((r) => stampProvenance(r, {
-          source: "builder-chat",
-          actor: { kind: "user", id: "u_vel", name: "Vel", email: "velalagan@futureagi.com" },
-          at, batchId,
-        }));
+        /* Stamped like every other add route — tools, proof, the environment
+           version it was added under — so the tool check runs here too. */
+        const batch = stampNewBatch(fresh, { env, envState, source: "builder-chat", actor: currentUser() });
+        const stamped = batch.rows;
+        const warn = unanswerableNote(batch);
         patch({ scenarios: [...(envState.scenarios || []), ...stamped] });
         const added = stamped.length;
         const requested = addIntent.count;
         const shortfall = added < requested;
-        const line = shortfall
+        const line = (shortfall
           ? `Added ${added} scenarios (the derivation pool only had ${added} unused rows left).`
-          : `Added ${added} scenarios — they're stamped as a new batch on the Scenarios tab.`;
+          : `Added ${added} scenarios — they're stamped as a new batch on the Scenarios tab.`) + (warn ? ` ${warn}` : "");
         setTurns((prev) => [...prev, {
           id: `a-${Date.now()}`,
           role: "assistant",
