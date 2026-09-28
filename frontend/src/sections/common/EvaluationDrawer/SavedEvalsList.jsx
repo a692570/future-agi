@@ -761,7 +761,9 @@ const SavedEvalsList = ({
   useEffect(() => {
     if (!autoSelectedNames?.size) return;
     const newIds = evals
-      .filter((e) => autoSelectedNames.has(e.name) && !processedRef.current.has(e.id))
+      .filter(
+        (e) => autoSelectedNames.has(e.name) && !processedRef.current.has(e.id),
+      )
       .map((e) => e.id);
     if (newIds.length === 0) return;
     newIds.forEach((id) => processedRef.current.add(id));

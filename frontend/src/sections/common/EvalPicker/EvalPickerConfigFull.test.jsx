@@ -1,12 +1,12 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "src/utils/test-utils";
+import { render, waitFor } from "src/utils/test-utils";
 
 import EvalPickerProvider from "./context/EvalPickerProvider";
 import EvalPickerConfigFull from "./EvalPickerConfigFull";
 
 const { capturedProps } = vi.hoisted(() => ({
-  capturedProps: { tracing: null },
+  capturedProps: { tracing: null, llmPrompt: null },
 }));
 
 vi.mock("src/sections/evals/components/TracingTestMode", () => {
@@ -51,8 +51,13 @@ vi.mock("src/sections/evals/components/InstructionEditor", () => ({
   default: () => <div />,
 }));
 
+// LLMPromptEditor renders the ModelSelector inline, so its `model` prop is
+// the hydrated model the user actually sees in the chip.
 vi.mock("src/sections/evals/components/LLMPromptEditor", () => ({
-  default: () => <div />,
+  default: (props) => {
+    capturedProps.llmPrompt = props;
+    return <div data-testid="llm-prompt-editor" />;
+  },
 }));
 
 vi.mock("src/sections/evals/components/CodeEvalEditor", () => ({
@@ -151,7 +156,21 @@ const TIME_WINDOW = {
   endDate: "2026-05-18T18:29:59.000Z",
 };
 
-const renderConfigFull = ({ sourceTimeWindow } = {}) =>
+const DEFAULT_EVAL_DATA = {
+  id: "tpl-1",
+  templateId: "tpl-1",
+  name: "toxicity",
+};
+
+const DEFAULT_DETAIL = {
+  id: "tpl-1",
+  name: "toxicity",
+  eval_type: "llm",
+  output_type: "pass_fail",
+  config: {},
+};
+
+const renderConfigFull = ({ sourceTimeWindow, evalData } = {}) =>
   render(
     <EvalPickerProvider
       source="task"
@@ -164,7 +183,7 @@ const renderConfigFull = ({ sourceTimeWindow } = {}) =>
       sourceTimeWindow={sourceTimeWindow}
     >
       <EvalPickerConfigFull
-        evalData={{ id: "tpl-1", templateId: "tpl-1", name: "toxicity" }}
+        evalData={evalData || DEFAULT_EVAL_DATA}
         onBack={() => {}}
         onSave={() => {}}
         isSaving={false}
@@ -205,5 +224,64 @@ describe("EvalPickerConfigFull — task preview time window", () => {
         (f) => f.column_id === "created_at",
       ),
     ).toBe(false);
+  });
+});
+
+describe("EvalPickerConfigFull — model hydration on edit", () => {
+  beforeEach(() => {
+    capturedProps.llmPrompt = null;
+    stableEvalDetail.data = { ...DEFAULT_DETAIL };
+  });
+
+  const hydratedModel = async () => {
+    await waitFor(() => expect(capturedProps.llmPrompt).not.toBeNull());
+    return capturedProps.llmPrompt.model;
+  };
+
+  it("restores the model saved in run_config instead of the template default", async () => {
+    // The user edited this eval down to turing_small. `build_run_config_view`
+    // used to drop `model` from its whitelist, so run_config arrived without
+    // it and the form fell back to the template default (turing_large).
+    stableEvalDetail.data = { ...DEFAULT_DETAIL, model: "turing_large" };
+    renderConfigFull({
+      evalData: {
+        ...DEFAULT_EVAL_DATA,
+        run_config: { model: "turing_small", agent_mode: "agent" },
+      },
+    });
+
+    expect(await hydratedModel()).toBe("turing_small");
+  });
+
+  it("prefers the canonical detail model over the list's stripped form", async () => {
+    // The list endpoint returns "small" for built-in templates while detail
+    // returns "turing_small". Mapping `model` into normalizedRunConfig let the
+    // stripped value win and render "small" in the chip — guard against that
+    // mapping coming back.
+    stableEvalDetail.data = { ...DEFAULT_DETAIL, model: "turing_small" };
+    renderConfigFull({
+      evalData: { ...DEFAULT_EVAL_DATA, model: "small", run_config: {} },
+    });
+
+    expect(await hydratedModel()).toBe("turing_small");
+  });
+
+  it("keeps the saved model when the list also carries a stripped form", async () => {
+    stableEvalDetail.data = { ...DEFAULT_DETAIL, model: "turing_large" };
+    renderConfigFull({
+      evalData: {
+        ...DEFAULT_EVAL_DATA,
+        model: "small",
+        run_config: { model: "turing_small" },
+      },
+    });
+
+    expect(await hydratedModel()).toBe("turing_small");
+  });
+
+  it("falls back to turing_large when no model is available anywhere", async () => {
+    renderConfigFull({ evalData: { ...DEFAULT_EVAL_DATA, run_config: {} } });
+
+    expect(await hydratedModel()).toBe("turing_large");
   });
 });

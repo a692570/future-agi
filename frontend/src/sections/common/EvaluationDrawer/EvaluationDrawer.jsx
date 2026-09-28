@@ -755,7 +755,9 @@ const EvaluationDrawerChild = ({
               }
               refreshGrid?.(null, true);
               if (evalConfig.name) {
-                setAddedEvalNames((prev) => new Set([...prev, evalConfig.name]));
+                setAddedEvalNames(
+                  (prev) => new Set([...prev, evalConfig.name]),
+                );
               }
               setEvalPickerOpen(false);
               setVisibleSection("list");
