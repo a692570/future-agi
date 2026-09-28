@@ -26,7 +26,8 @@ requires the predicate alone to drop them.
 Since the collector began ranking ``gen_ai.provider.name`` above
 ``gen_ai.system``, a Vapi call whose assistant runs an OpenAI model is stored
 with ``provider='openai'`` and ``gen_ai.system='vapi'``. The list renders it
-as a Vapi call, so the toggle and the Voice chart must treat it as one too.
+as a Vapi call, so the toggle, the Voice chart and the call's detail must
+treat it as one too.
 """
 
 from __future__ import annotations
@@ -349,3 +350,16 @@ def test_voice_chart_counts_the_calls_the_list_shows(
         point["value"] for point in result["data"] if point["primary_traffic"]
     )
     assert traffic == len(_LISTED_WITH_LLM_PROVIDER_CALLS[remove_simulation_calls])
+
+
+def test_voice_detail_names_the_voice_provider_not_the_llm_provider(
+    auth_client, voice_calls, llm_provider_calls
+):
+    response = auth_client.get(
+        "/tracer/trace/voice_call_detail/",
+        {"trace_id": voice_calls["trace_ids"]["llm-provider-caller"]},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.content
+    root = response.json()["result"]["observation_span"][0]
+    assert root["provider"] == "vapi"

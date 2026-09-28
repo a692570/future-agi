@@ -2200,7 +2200,9 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
 
             # Raw provider payload if present (collector ships it as JSON string)
             raw_log = span_raw_log(attrs)
-            provider = trace.provider or "vapi"
+            provider = ObservabilityService.resolve_voice_provider(
+                trace.provider, attrs
+            )
 
             processed_log = ObservabilityService.process_raw_logs(
                 raw_log, provider, span_attributes=attrs
@@ -3993,7 +3995,6 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
             for span in detail.spans
             if span.get("parent_span_id") not in (None, "")
         ]
-        provider = row.get("provider") or "vapi"
 
         # Parse attributes_extra to get raw_log
         span_attrs_raw = row.get("span_attributes", "{}")
@@ -4015,6 +4016,10 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
             span_attrs.setdefault(k, v)
         for k, v in (row.get("attrs_bool") or {}).items():
             span_attrs.setdefault(k, bool(v))
+        # gen_ai.system lives in attrs_string, so resolve after the union.
+        provider = ObservabilityService.resolve_voice_provider(
+            row.get("provider"), span_attrs
+        )
         # eval_attributes is not a top-level column on the CH `spans` table,
         # but the adapter merges it into `attributes_extra` under the key
         # "eval_attributes". Extract it so simulation_context can resolve
