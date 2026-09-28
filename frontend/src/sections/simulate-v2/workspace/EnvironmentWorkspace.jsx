@@ -9,8 +9,8 @@ import Iconify from "src/components/iconify";
 import { CustomTabs } from "src/components/tabs/tabs";
 import { paths } from "src/routes/paths";
 import { protoRunId } from "../_mock/executionAdapter";
-import { generatedPool } from "../_mock/scenarios";
-import { detectAddScenariosIntent } from "../_mock/addScenariosIntent";
+import { generatedPool, scenariosFromDescription } from "../_mock/scenarios";
+import { detectAddScenariosIntent, describedAsk } from "../_mock/addScenariosIntent";
 import { stampNewBatch, unanswerableNote } from "../_mock/addScenarios";
 import { currentUser } from "../_mock/scenarioProvenance";
 import { getEnvironment } from "../_mock/environments";
@@ -543,14 +543,19 @@ export default function EnvironmentWorkspace() {
     setTimeout(() => {
       setChatRunning(false);
       if (addIntent) {
+        /* A described ask ("callers disputing a double charge") gets
+           scenarios written for it; a bare "add 10 more" draws on what the
+           environment would derive. */
+        const described = describedAsk(trimmed);
         const existing = new Set((envState.scenarios || []).map((s) => s.id));
-        const pool = generatedPool(env).filter((s) => !existing.has(s.id));
-        const fresh = pool.slice(0, addIntent.count);
+        const fresh = described
+          ? scenariosFromDescription(env, described, addIntent.asked ? addIntent.count : 3)
+          : generatedPool(env).filter((s) => !existing.has(s.id)).slice(0, addIntent.count);
         if (fresh.length === 0) {
           setTurns((prev) => [...prev, {
             id: `a-${Date.now()}`,
             role: "assistant",
-            steps: [{ kind: "note", text: "This environment has already used every derived scenario in the pool — nothing left to add. Delete a few first, or connect a fresh source." }],
+            steps: [{ kind: "note", text: "Every scenario this environment would derive is already in. Tell me what's missing — e.g. “callers disputing a double charge” — and I'll write those." }],
           }]);
           return;
         }
@@ -561,11 +566,14 @@ export default function EnvironmentWorkspace() {
         const warn = unanswerableNote(batch);
         patch({ scenarios: [...(envState.scenarios || []), ...stamped] });
         const added = stamped.length;
-        const requested = addIntent.count;
+        /* A described ask only asked for a number if it named one. */
+        const requested = described && !addIntent.asked ? added : addIntent.count;
         const shortfall = added < requested;
-        const line = (shortfall
-          ? `Added ${added} scenarios (the derivation pool only had ${added} unused rows left).`
-          : `Added ${added} scenarios — they're stamped as a new batch on the Scenarios tab.`) + (warn ? ` ${warn}` : "");
+        const line = (described
+          ? `Added ${added} scenario${added === 1 ? "" : "s"} for “${described}” — ${stamped.map((s) => s.summary.toLowerCase()).join("; ")}. They're a new batch on the Scenarios tab.${shortfall ? ` That's every distinct way I could see it playing out; describe another angle for more.` : ""}`
+          : shortfall
+            ? `Added ${added} scenarios (the derivation pool only had ${added} unused rows left).`
+            : `Added ${added} scenarios — they're stamped as a new batch on the Scenarios tab.`) + (warn ? ` ${warn}` : "");
         setTurns((prev) => [...prev, {
           id: `a-${Date.now()}`,
           role: "assistant",

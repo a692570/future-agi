@@ -180,7 +180,7 @@ AddEvalsDrawer.propTypes = {
   onClose: PropTypes.func,
   env: PropTypes.object,
   envState: PropTypes.object,
-  existingIds: PropTypes.object,
+  existingIds: PropTypes.oneOfType([PropTypes.array, PropTypes.object]),
   onAdd: PropTypes.func,
 };
 

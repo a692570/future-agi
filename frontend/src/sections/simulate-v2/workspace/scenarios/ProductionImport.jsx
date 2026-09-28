@@ -10,20 +10,26 @@ import { useTheme } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import ErrorSeverityBadge from "src/pages/dashboard/error-feed/components/ErrorSeverityBadge";
 import { SectionCard } from "../../components/primitives";
-import { productionClustersFor, scenariosFromClusters } from "../../_mock/productionClusters";
+import { productionClustersFor, scenariosFromCases, productionScenarioId } from "../../_mock/productionClusters";
 
 /**
  * Add scenarios from production.
  *
  * The Error Feed already clusters failing traces by fingerprint. This
- * route lets you promote whole clusters into scenarios in one click, so
- * every real-world regression the agent ever hit is a permanent test
- * the simulation runs against — closing the loop between production
- * and the environment that shipped it.
+ * route promotes them into scenarios, so every real-world regression the
+ * agent ever hit is a permanent test the simulation runs against —
+ * closing the loop between production and the environment that shipped it.
  *
- * Each imported scenario keeps a link back to its cluster (id, kind,
- * count, first/last seen), so a later view can say "this scenario
- * reproduces cluster X, seen Y times in the last month".
+ * A cluster becomes one scenario per distinct case, not one per trace:
+ * the 84 traces behind `lookup_order::TypeError` are three situations
+ * (a dashed value, a typo, an email instead of an ID), and three
+ * scenarios test them — 84 would test the same three things 84 times.
+ * Picking a cluster picks all its cases; the expanded row lets you drop
+ * the ones you don't want.
+ *
+ * Each imported scenario keeps a link back to its cluster, its case and
+ * the traces it came from, so a later view can say "this scenario
+ * reproduces case Y of cluster X, seen N times".
  */
 export default function ProductionImport({ env, onAdd, selected }) {
   const clusters = useMemo(() => productionClustersFor(env), [env]);
@@ -31,9 +37,14 @@ export default function ProductionImport({ env, onAdd, selected }) {
     () => new Set(selected.map((s) => s.id)),
     [selected],
   );
+  /* A case is already in if its own scenario is — or, for imports made
+     before clusters split into cases, if the whole cluster is. */
+  const isAdded = (c, k) => alreadyIn.has(productionScenarioId(c, k)) || alreadyIn.has(`from-prod::${c.id}`);
+  const openCases = (c) => c.cases.filter((k) => !isAdded(c, k));
 
   const [severity, setSeverity] = useState("all");
   const [query, setQuery] = useState("");
+  /* { [clusterId]: { [caseId]: true } } */
   const [picked, setPicked] = useState({});
 
   const shown = useMemo(() => {
@@ -46,18 +57,32 @@ export default function ProductionImport({ env, onAdd, selected }) {
     });
   }, [clusters, severity, query]);
 
-  const chosen = shown.filter((c) => picked[c.id] && !alreadyIn.has(`from-prod::${c.id}`));
-  const importable = shown.filter((c) => !alreadyIn.has(`from-prod::${c.id}`));
+  const pickedCases = (c) => openCases(c).filter((k) => picked[c.id]?.[k.id]);
+  const chosen = shown
+    .map((c) => ({ cluster: c, cases: pickedCases(c) }))
+    .filter((p) => p.cases.length > 0);
+  const scenarioCount = chosen.reduce((n, p) => n + p.cases.length, 0);
+  const importable = shown.filter((c) => openCases(c).length > 0);
 
-  const toggle = (id) => setPicked((p) => ({ ...p, [id]: !p[id] }));
+  const allOf = (c) => Object.fromEntries(openCases(c).map((k) => [k.id, true]));
+  /* The cluster checkbox picks every case it still has open, or — when
+     they're all picked already — clears them. */
+  const toggleCluster = (c) => setPicked((p) => ({
+    ...p,
+    [c.id]: pickedCases(c).length === openCases(c).length ? {} : allOf(c),
+  }));
+  const toggleCase = (c, k) => setPicked((p) => ({
+    ...p,
+    [c.id]: { ...p[c.id], [k.id]: !p[c.id]?.[k.id] },
+  }));
   const selectAll = () => {
     const next = { ...picked };
-    importable.forEach((c) => { next[c.id] = true; });
+    importable.forEach((c) => { next[c.id] = allOf(c); });
     setPicked(next);
   };
   const clear = () => setPicked({});
 
-  const commit = () => onAdd(scenariosFromClusters(chosen));
+  const commit = () => onAdd(scenariosFromCases(chosen));
 
   return (
     /*
@@ -132,8 +157,8 @@ export default function ProductionImport({ env, onAdd, selected }) {
             flexShrink: 0, minWidth: 148, px: 2,
           }}
         >
-          {chosen.length > 0
-            ? `Add ${chosen.length} scenario${chosen.length === 1 ? "" : "s"}`
+          {scenarioCount > 0
+            ? `Add ${scenarioCount} scenario${scenarioCount === 1 ? "" : "s"}`
             : "Add scenarios"}
         </Button>
       </Stack>
@@ -153,12 +178,13 @@ export default function ProductionImport({ env, onAdd, selected }) {
           {chosen.length > 0 && (
             <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>
               {" · "}{chosen.length} selected
+              {" · "}{scenarioCount} scenario{scenarioCount === 1 ? "" : "s"}
             </Box>
           )}
         </Typography>
         <Button
           size="small" onClick={selectAll}
-          disabled={importable.length === 0 || importable.every((c) => picked[c.id])}
+          disabled={importable.length === 0 || importable.every((c) => pickedCases(c).length === openCases(c).length)}
           sx={{
             typography: "s3", fontWeight: 700, color: "primary.main", minWidth: 0,
             "&.Mui-disabled": { color: "text.disabled" },
@@ -187,8 +213,9 @@ export default function ProductionImport({ env, onAdd, selected }) {
         <ClustersTable
           rows={shown}
           picked={picked}
-          alreadyIn={alreadyIn}
-          onToggle={toggle}
+          isAdded={isAdded}
+          onToggleCluster={toggleCluster}
+          onToggleCase={toggleCase}
         />
       )}
     </SectionCard>
@@ -204,12 +231,22 @@ ProductionImport.propTypes = {
 /* ── table ───────────────────────────────────────────────────────────────── */
 
 const COLUMNS = [
-  { id: "cluster",  label: "Cluster",   minWidth: 320 },
-  { id: "severity", label: "Severity",  width: 100 },
-  { id: "kind",     label: "Kind",      width: 140 },
-  { id: "events",   label: "Events",    width: 80,  align: "right" },
-  { id: "lastSeen", label: "Last seen", width: 110 },
+  { id: "cluster",   label: "Cluster",   minWidth: 320 },
+  { id: "severity",  label: "Severity",  width: 100 },
+  { id: "kind",      label: "Kind",      width: 140 },
+  { id: "traces",    label: "Traces",    width: 72,  align: "right" },
+  {
+    id: "scenarios", label: "Scenarios", width: 92, align: "right",
+    hint: "One per distinct case. Traces that fail the same way in the same situation are the same test, so they become one scenario.",
+  },
+  { id: "lastSeen",  label: "Last seen", width: 110 },
 ];
+
+const CHECKBOX_SX = {
+  p: 0.5, color: "text.disabled",
+  "&.Mui-checked": { color: "text.primary" },
+  "&.MuiCheckbox-indeterminate": { color: "text.primary" },
+};
 
 /**
  * Deliberately shaped to mirror the Error Feed table (sticky compact
@@ -218,13 +255,13 @@ const COLUMNS = [
  * count) — so the "From production" pane reads as the same object the
  * user sees in Observe, just filtered to what they can promote.
  */
-function ClustersTable({ rows, picked, alreadyIn, onToggle }) {
+function ClustersTable({ rows, picked, isAdded, onToggleCluster, onToggleCase }) {
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
 
   return (
     <TableContainer sx={{ flex: 1, minHeight: 0 }}>
-      <Table stickyHeader size="small" sx={{ minWidth: 780 }}>
+      <Table stickyHeader size="small" sx={{ minWidth: 860 }}>
         <TableHead>
           <TableRow
             sx={{
@@ -242,9 +279,21 @@ function ClustersTable({ rows, picked, alreadyIn, onToggle }) {
                 align={col.align || "left"}
                 sx={{ width: col.width, minWidth: col.minWidth }}
               >
-                <Typography sx={{ typography: "s3", fontWeight: 500, color: "text.secondary" }}>
-                  {col.label}
-                </Typography>
+                <Stack
+                  direction="row" alignItems="center" spacing={0.5}
+                  justifyContent={col.align === "right" ? "flex-end" : "flex-start"}
+                >
+                  <Typography sx={{ typography: "s3", fontWeight: 500, color: "text.secondary" }}>
+                    {col.label}
+                  </Typography>
+                  {col.hint && (
+                    <Tooltip title={col.hint} arrow placement="top">
+                      <Box component="span" sx={{ display: "flex", color: "text.disabled", cursor: "help" }}>
+                        <Iconify icon="solar:info-circle-linear" width={13} />
+                      </Box>
+                    </Tooltip>
+                  )}
+                </Stack>
               </TableCell>
             ))}
             <TableCell sx={{ width: 40 }} />
@@ -256,9 +305,10 @@ function ClustersTable({ rows, picked, alreadyIn, onToggle }) {
             <ClusterTableRow
               key={c.id}
               cluster={c}
-              picked={!!picked[c.id]}
-              alreadyIn={alreadyIn.has(`from-prod::${c.id}`)}
-              onToggle={() => onToggle(c.id)}
+              pickedMap={picked[c.id] || {}}
+              isAdded={isAdded}
+              onToggle={() => onToggleCluster(c)}
+              onToggleCase={(k) => onToggleCase(c, k)}
             />
           ))}
         </TableBody>
@@ -269,25 +319,35 @@ function ClustersTable({ rows, picked, alreadyIn, onToggle }) {
 ClustersTable.propTypes = {
   rows: PropTypes.array,
   picked: PropTypes.object,
-  alreadyIn: PropTypes.instanceOf(Set),
-  onToggle: PropTypes.func,
+  isAdded: PropTypes.func,
+  onToggleCluster: PropTypes.func,
+  onToggleCase: PropTypes.func,
 };
 
-function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
+function ClusterTableRow({ cluster, pickedMap, isAdded, onToggle, onToggleCase }) {
   const [open, setOpen] = useState(false);
   const c = cluster;
   const theme = useTheme();
   const isDark = theme.palette.mode === "dark";
-  const rowSelected = picked && !alreadyIn;
+
+  const remaining = c.cases.filter((k) => !isAdded(c, k));
+  const addedCount = c.cases.length - remaining.length;
+  const alreadyIn = remaining.length === 0;
+  const pickedCount = remaining.filter((k) => pickedMap[k.id]).length;
+  const allPicked = !alreadyIn && pickedCount === remaining.length;
+  const somePicked = pickedCount > 0 && !allPicked;
+  const rowSelected = pickedCount > 0;
 
   return (
     <>
       <TableRow
         hover
         selected={rowSelected}
-        onClick={alreadyIn ? undefined : onToggle}
+        /* Clicking the row opens its detail; only the checkbox selects —
+           so reading a cluster never quietly adds it. */
+        onClick={() => setOpen((o) => !o)}
         sx={{
-          cursor: alreadyIn ? "default" : "pointer",
+          cursor: "pointer",
           height: 56,
           "&.Mui-selected, &.Mui-selected:hover": {
             bgcolor: isDark ? "rgba(120,87,252,0.12)" : "rgba(120,87,252,0.05)",
@@ -301,14 +361,11 @@ function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
         <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             size="small"
-            checked={picked || alreadyIn}
+            checked={allPicked || alreadyIn}
+            indeterminate={somePicked}
             disabled={alreadyIn}
             onChange={onToggle}
-            sx={{
-              p: 0.5, color: "text.disabled",
-              "&.Mui-checked": { color: "text.primary" },
-              "&.MuiCheckbox-indeterminate": { color: "text.primary" },
-            }}
+            sx={CHECKBOX_SX}
           />
         </TableCell>
 
@@ -338,9 +395,9 @@ function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
                   Critical
                 </Typography>
               )}
-              {alreadyIn && (
+              {addedCount > 0 && (
                 <Typography sx={{ typography: "s3", color: "text.disabled" }}>
-                  · already added
+                  {alreadyIn ? "· already added" : `· ${addedCount} of ${c.cases.length} already added`}
                 </Typography>
               )}
             </Stack>
@@ -364,15 +421,28 @@ function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
           </Typography>
         </TableCell>
 
+        {/* how many scenarios this cluster turns into — "2 of 3" once you've
+            dropped a case, so the count never hides a partial pick */}
+        <TableCell align="right">
+          <Typography
+            sx={{
+              typography: "s2", fontWeight: 500, fontFeatureSettings: "'tnum'",
+              color: alreadyIn ? "text.disabled" : "text.primary",
+            }}
+          >
+            {somePicked ? `${pickedCount} of ${remaining.length}` : remaining.length || c.cases.length}
+          </Typography>
+        </TableCell>
+
         <TableCell>
           <Typography sx={{ typography: "s3", color: "text.disabled" }} noWrap>
             {c.lastSeen}
           </Typography>
         </TableCell>
 
-        <TableCell onClick={(e) => e.stopPropagation()}>
+        <TableCell>
           <Tooltip title={open ? "Hide detail" : "Show detail"} arrow>
-            <IconButton size="small" onClick={() => setOpen((o) => !o)}>
+            <IconButton size="small">
               <Iconify
                 icon={open ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"}
                 width={14} sx={{ color: "text.subtitle" }}
@@ -400,23 +470,31 @@ function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
                 <Typography sx={{ typography: "s2", color: "text.secondary" }}>{c.why}</Typography>
               </Box>
               <Box>
-                <Label>Sample traces</Label>
-                <Stack spacing={0.375}>
-                  {c.snippets.map((s, i) => (
-                    <Typography
-                      key={i}
-                      sx={{
-                        typography: "s3", fontFamily: "ui-monospace, Menlo, monospace",
-                        color: "text.secondary", pl: 1, borderLeft: "2px solid", borderColor: "divider",
-                      }}
-                    >
-                      {s}
-                    </Typography>
-                  ))}
+                <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ mb: 0.5 }}>
+                  <Label sx={{ mb: 0 }}>
+                    {`Becomes ${c.cases.length} scenario${c.cases.length === 1 ? "" : "s"}`}
+                  </Label>
+                  <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                    {c.cases.length === 1
+                      ? `— all ${c.count} traces failed in the same situation`
+                      : `— one per distinct case across its ${c.count} traces`}
+                  </Typography>
                 </Stack>
+                <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden" }}>
+                  {c.cases.map((k, i) => (
+                    <CaseRow
+                      key={k.id}
+                      kase={k}
+                      first={i === 0}
+                      added={isAdded(c, k)}
+                      picked={!!pickedMap[k.id]}
+                      onToggle={() => onToggleCase(k)}
+                    />
+                  ))}
+                </Box>
               </Box>
               <Box>
-                <Label>Becomes a scenario that tests</Label>
+                <Label>Each one tests</Label>
                 <Typography sx={{ typography: "s2", color: "text.primary" }}>{c.useCase}</Typography>
               </Box>
             </Stack>
@@ -428,8 +506,58 @@ function ClusterTableRow({ cluster, picked, alreadyIn, onToggle }) {
 }
 ClusterTableRow.propTypes = {
   cluster: PropTypes.object,
+  pickedMap: PropTypes.object,
+  isAdded: PropTypes.func,
+  onToggle: PropTypes.func,
+  onToggleCase: PropTypes.func,
+};
+
+/**
+ * One distinct case inside a cluster — what was different when it failed,
+ * a line from one of its traces, and how many traces it covers. Each is
+ * one scenario, and can be dropped without dropping the cluster.
+ */
+function CaseRow({ kase, first, added, picked, onToggle }) {
+  return (
+    <Stack
+      direction="row" alignItems="center" spacing={1.25}
+      sx={{
+        px: 1, py: 0.75,
+        borderTop: first ? "none" : "1px solid", borderColor: "divider",
+      }}
+    >
+      {/* Same rule as the cluster rows: only the checkbox selects. */}
+      <Checkbox
+        size="small"
+        checked={picked || added}
+        disabled={added}
+        onChange={onToggle}
+        sx={CHECKBOX_SX}
+      />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography sx={{ typography: "s2", fontWeight: 500, color: added ? "text.disabled" : "text.primary" }}>
+          {kase.label}
+        </Typography>
+        <Typography
+          noWrap
+          sx={{ typography: "s3", fontFamily: "ui-monospace, Menlo, monospace", color: "text.subtitle" }}
+        >
+          {kase.quote}
+        </Typography>
+      </Box>
+      <Typography
+        sx={{ typography: "s3", color: "text.subtitle", fontFeatureSettings: "'tnum'", whiteSpace: "nowrap", flexShrink: 0 }}
+      >
+        {added ? "already added" : `${kase.traceCount} trace${kase.traceCount === 1 ? "" : "s"}`}
+      </Typography>
+    </Stack>
+  );
+}
+CaseRow.propTypes = {
+  kase: PropTypes.object,
+  first: PropTypes.bool,
+  added: PropTypes.bool,
   picked: PropTypes.bool,
-  alreadyIn: PropTypes.bool,
   onToggle: PropTypes.func,
 };
 
@@ -482,11 +610,11 @@ function KindPill({ label, color, isDark }) {
 }
 KindPill.propTypes = { label: PropTypes.string, color: PropTypes.string, isDark: PropTypes.bool };
 
-function Label({ children }) {
+function Label({ children, sx }) {
   return (
-    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: .4, mb: 0.5 }}>
+    <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: .4, mb: 0.5, ...sx }}>
       {children}
     </Typography>
   );
 }
-Label.propTypes = { children: PropTypes.node };
+Label.propTypes = { children: PropTypes.node, sx: PropTypes.object };

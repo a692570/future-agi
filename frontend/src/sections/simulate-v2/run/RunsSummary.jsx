@@ -22,8 +22,16 @@ import { neutralCheckboxSx } from "../components/primitives";
 
 /* How many evals the chart legend names before folding the rest into "+N more". */
 const LEGEND_MAX = 4;
-/* With more evals than the legend holds, how many the chart starts with. */
+/* Up to this many evals, the chart starts with all of them drawn. */
+const ALL_SHOWN_MAX = 6;
+/* With more evals than that, how many the chart starts with. */
 const DEFAULT_SHOWN = 3;
+/* How many of the most recent runs the chart shows before "Show all". */
+const RUN_WINDOW = 10;
+/* Length of each colour's segment where several evals share one line. */
+const STRIPE = 10;
+/* The runs chart's height. */
+const CHART_HEIGHT = 200;
 
 /* Timestamp for a run row. Falls back to startedAt and never prints
    "Invalid Date" for an in-progress run that has no finishedAt yet. */
@@ -69,6 +77,16 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
   /* The eval picker is opened from the legend's "+N more" as well as from
      its own control, so its open state lives here. */
   const [evalPickerOpen, setEvalPickerOpen] = useState(false);
+  /* The chart shows the last RUN_WINDOW runs until someone asks for all. */
+  const [allRunsInChart, setAllRunsInChart] = useState(false);
+  /* The eval being hovered in the legend — its line is drawn on top and the
+     rest fade, so one eval can be followed through a stack of others. */
+  const [focusEvalId, setFocusEvalId] = useState(null);
+  /* The legend's "+N more" dropdown. */
+  const [moreAnchor, setMoreAnchor] = useState(null);
+  /* An eval clicked in the legend — the chart shows only its line until it's
+     clicked again. */
+  const [isolatedEvalId, setIsolatedEvalId] = useState(null);
 
   /* The winner is kept with the environment rather than derived, because it is
      a decision someone made under stated weights — not a fact about the runs
@@ -149,13 +167,14 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
   const rows = useMemo(() => [...mergedRaw].reverse(), [mergedRaw]);
 
   /* Demo only: one run waiting in the queue on top, so the Queued status is
-     visible. It has no results yet, is not selectable, and stays out of the
-     chart / compare / winner, which all read `rows` / `allSummaries`. */
+     visible. It has no results yet and stays out of the chart / compare /
+     winner, which all read `rows` / `allSummaries` — but it can be selected
+     and deleted, like any run nobody wants any more. */
   const tableRows = useMemo(() => {
-    if (!DEMO_QUEUED_ROW || !rows.length) return rows;
+    if (!DEMO_QUEUED_ROW || envState.demoQueuedRemoved || !rows.length) return rows;
     const next = Math.max(...rows.map((r) => r.ordinal || 0)) + 1;
     return [{
-      id: "demo-queued",
+      id: QUEUED_ID,
       kind: "queued-demo",
       status: "queued",
       ordinal: next,
@@ -212,6 +231,7 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     () => series.map((s) => ({ id: s.id, name: s.name, color: s.color })),
     [series],
   );
+  const toggleIsolate = (id) => setIsolatedEvalId((cur) => (cur === id ? null : id));
 
   /* Four graders on one axis is already a lot; eight would be a scribble. The
      chart draws the ones asked for, and the table keeps all of them — the
@@ -220,7 +240,10 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
      lowest-scoring in the latest run (the first few before anything has
      scored) — and the picker adds the rest. */
   const defaultShownIds = useMemo(() => {
-    if (evals.length <= LEGEND_MAX) return evals.map((e) => e.id);
+    /* The graph exists to show every eval moving together, and nudging
+       each eval's dots apart keeps half a dozen readable — so all of them
+       up to ALL_SHOWN_MAX; the legend still folds past LEGEND_MAX. */
+    if (evals.length <= ALL_SHOWN_MAX) return evals.map((e) => e.id);
     const latest = (id) => {
       const data = series.find((x) => x.id === id)?.data || [];
       for (let i = data.length - 1; i >= 0; i -= 1) if (data[i] != null) return data[i];
@@ -253,20 +276,30 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     long as they stay monotone (self improvement, in the way the reader
     reads it, only goes up).
   */
+  /*
+    All evals on one line chart, runs along the bottom — the most recent
+    RUN_WINDOW of them until "Show all".
+  */
   const chartData = useMemo(() => {
     /* Chart plots the merged chronological stream — every run in the
        list contributes a point, trials included. That's what the
        "trials are peer runs" rule means: the trend line has to include
        them, otherwise the chart contradicts the table below it. */
-    const categories = mergedRaw.map((r, i) => {
-      const label = i === mergedRaw.length - 1 ? "latest" : `Run ${r.ordinal}`;
-      return label;
-    });
+    const windowed = !allRunsInChart && mergedRaw.length > RUN_WINDOW;
+    const start = windowed ? mergedRaw.length - RUN_WINDOW : 0;
+    const runs = mergedRaw.slice(start);
+    const categories = runs.map((r, i) => `Run ${r.ordinal}${i === runs.length - 1 ? " · latest" : ""}`);
     const seriesOut = shownSeries.map((x) => ({
-      name: x.name, color: x.color, data: [...x.data],
+      id: x.id,
+      name: x.name,
+      color: x.color,
+      data: x.data.slice(start),
     }));
-    return { categories, categoriesFull: categories, series: seriesOut };
-  }, [shownSeries, mergedRaw]);
+    return { runs, start, categories, series: seriesOut, windowed };
+  }, [shownSeries, mergedRaw, allRunsInChart]);
+  /* One run can't be a line — it's drawn as a bar per eval until a second
+     run exists, then the same graph becomes lines. */
+  const singleRun = chartData.runs.length === 1;
 
 
   /* The same metric definitions the winner weights use, so a column that reads
@@ -310,6 +343,10 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
   const isTrialId = (id) => /^OPT-\d+-t\d+$/.test(id || "");
   const selectedHasTrials = selected.some(isTrialId);
   const selectedManualOnly = selected.filter((id) => !isTrialId(id));
+  /* A queued run has no results, so it can be deleted but can't be a
+     baseline or one side of a comparison — those count finished runs only. */
+  const selectedQueued = selected.includes(QUEUED_ID);
+  const selectedFinished = selected.filter((id) => id !== QUEUED_ID);
 
   /* Deleting runs takes the winner and the baseline with them when they
      point at something that no longer exists. Trials live under their
@@ -322,6 +359,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
       runs: envState.runs.filter((r) => !gone.has(r.id)),
       ...(gone.has(baselineId) ? { baselineRunId: null } : {}),
       ...(winner && gone.has(winner.runId) ? { winner: null } : {}),
+      /* Taking the queued run off the queue — it never started, so there is
+         nothing else to clear. */
+      ...(gone.has(QUEUED_ID) ? { demoQueuedRemoved: true } : {}),
     });
     setSelected([]);
     setDeleting(false);
@@ -347,20 +387,21 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
     /* Sized to each header so every label sits on one line — a header
        row wrapping to three lines read as clutter. With a baseline each
        column also carries a delta, so they share one wider size. */
-    const nums = baseline ? [100, 100, 100, 100, 100, 100] : [56, 72, 60, 60, 108, 60];
-    /* Graders get less room once there are several: four at full width push the
-       last one past the card, and a clipped column reads as a broken table
-       rather than as more table. */
+    /* Each floor is its header's one-line width plus the cell's padding, and no
+       more: the old floors added slack on top, so two graders already pushed
+       the last one ("Task s…") past a ~920px card on a laptop screen. */
+    const nums = baseline ? [100, 100, 100, 100, 100, 100] : [60, 76, 60, 64, 110, 64];
+    /* Grader names may wrap onto two lines, so their columns can be narrow. */
     const score = evals.length >= 4
-      ? (baseline ? 108 : 96)
-      : (baseline ? 132 : 100);
+      ? (baseline ? 108 : 84)
+      : (baseline ? 132 : 88);
     const columns = [...nums, ...evals.map(() => score)];
     return {
-      template: `26px minmax(224px, 360px) ${STATUS_COL}px ${columns.map((c) => `minmax(${c}px, 1fr)`).join(" ")}`,
-      /* Below this the table scrolls rather than crushing the run names. */
-      /* Plus the width of the fade, so the rightmost grader is never underneath
-         it at the end of a scroll. */
-      min: 26 + 224 + STATUS_COL + columns.reduce((a, c) => a + c, 0) + 12 * (columns.length + 1) + 28,
+      template: `26px minmax(152px, 360px) ${STATUS_COL}px ${columns.map((c) => `minmax(${c}px, 1fr)`).join(" ")}`,
+      /* Below this the table scrolls rather than crushing the run names: the
+         row's left padding, every column's floor, and the slice of the fade
+         that overhangs the last grader's own right padding. */
+      min: 20 + 26 + 152 + STATUS_COL + columns.reduce((a, c) => a + c, 0) + 8,
       deltaWidth: baseline ? 52 : 0,
       /* Where the system numbers end and the graders begin. */
       firstEval: 6,
@@ -376,8 +417,12 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
               is a normal thing to do and a normal thing to say — what is not
               acceptable is a subtitle that keeps promising "the same scenarios"
               while one of the rows below covered three of them. */}
+          {/* Counts what the table below lists — finished runs, plus any still
+              waiting — so the header and "Runs (N)" never disagree. */}
           <Typography sx={{ typography: "s1", color: "text.secondary" }}>
-            {mergedRaw.length} runs · {envState.scenarios.length} scenarios
+            {mergedRaw.length} run{mergedRaw.length === 1 ? "" : "s"}
+            {tableRows.length > mergedRaw.length && ` · ${tableRows.length - mergedRaw.length} queued`}
+            {" · "}{envState.scenarios.length} scenarios
             {trials.length > 0 && ` · ${summaries.length} manual, ${trials.length} SI trials`}
           </Typography>
         </Box>
@@ -493,6 +538,18 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
             })}
           </TextField>
 
+          {mergedRaw.length > RUN_WINDOW && (
+            <Button
+              size="small"
+              onClick={() => setAllRunsInChart((v) => !v)}
+              sx={{ typography: "s3", fontWeight: 600, color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap", minWidth: 0 }}
+            >
+              {chartData.windowed
+                ? `Last ${RUN_WINDOW} of ${mergedRaw.length} runs · Show all`
+                : `All ${mergedRaw.length} runs · Show last ${RUN_WINDOW}`}
+            </Button>
+          )}
+
           {/*
             One line, always. With a handful of evals the legend lists them
             all; past that it lists the first few and folds the rest into
@@ -510,29 +567,103 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                 direction="row" alignItems="center" spacing={1.5}
                 sx={{ flex: 1, minWidth: 0, justifyContent: "flex-end", overflow: "hidden" }}
               >
-                {listed.map((e) => (
-                  <Tooltip key={e.id} arrow title={e.name}>
-                    <Stack direction="row" alignItems="center" spacing={0.625} sx={{ minWidth: 0 }}>
-                      <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: e.color, flexShrink: 0 }} />
-                      <Typography noWrap sx={{ typography: "s3", color: "text.secondary", maxWidth: 170 }}>{e.name}</Typography>
-                    </Stack>
-                  </Tooltip>
-                ))}
+                {/* While one eval is isolated the chart is filtered — say so,
+                    with the way back, even when that eval sits in "+N more". */}
+                {isolatedEvalId && shown.some((e) => e.id === isolatedEvalId) && (
+                  <Button
+                    size="small"
+                    onClick={() => setIsolatedEvalId(null)}
+                    startIcon={<Iconify icon="mingcute:close-line" width={12} />}
+                    sx={{
+                      typography: "s3", fontWeight: 700, color: "text.primary", flexShrink: 0, minWidth: 0,
+                      px: 0.75, py: 0.125, border: "1px solid", borderColor: "divider", borderRadius: 0.75,
+                      "& .MuiButton-startIcon": { mr: 0.5 },
+                    }}
+                  >
+                    Show all evals
+                  </Button>
+                )}
+                {listed.map((e) => {
+                  const isolated = isolatedEvalId === e.id;
+                  const faded = (isolatedEvalId && !isolated) || (focusEvalId && focusEvalId !== e.id);
+                  return (
+                    <Tooltip
+                      key={e.id} arrow
+                      title={isolated ? `${e.name} — click to show all evals` : `${e.name} — click to show only this`}
+                    >
+                      <Stack
+                        direction="row" alignItems="center" spacing={0.625}
+                        /* Hover lifts this eval's line above the rest; click
+                           shows only its line. */
+                        onMouseEnter={() => setFocusEvalId(e.id)}
+                        onMouseLeave={() => setFocusEvalId(null)}
+                        onClick={() => toggleIsolate(e.id)}
+                        sx={{
+                          minWidth: 0, cursor: "pointer",
+                          px: 0.5, py: 0.25, mx: -0.5, borderRadius: 0.75,
+                          bgcolor: isolated ? "action.selected" : "transparent",
+                          opacity: faded ? 0.45 : 1,
+                          transition: "opacity .12s",
+                          "&:hover": { bgcolor: isolated ? "action.selected" : "action.hover" },
+                        }}
+                      >
+                        <LegendDot color={e.color} />
+                        <Typography noWrap sx={{ typography: "s3", color: "text.secondary", maxWidth: 140 }}>{e.name}</Typography>
+                      </Stack>
+                    </Tooltip>
+                  );
+                })}
                 {rest > 0 && (
-                  <Tooltip arrow title={shown.slice(room).map((e) => e.name).join(", ")}>
+                  <>
                     <Typography
                       component="button"
-                      onClick={() => setEvalPickerOpen(true)}
+                      onClick={(ev) => setMoreAnchor(ev.currentTarget)}
                       sx={{
+                        display: "inline-flex", alignItems: "center", gap: 0.25,
                         typography: "s3", fontWeight: 700, color: "text.primary", flexShrink: 0,
-                        border: "1px solid", borderColor: "divider", borderRadius: 0.75,
-                        bgcolor: "transparent", px: 0.75, py: 0.125, cursor: "pointer",
+                        border: "1px solid", borderColor: moreAnchor ? "text.disabled" : "divider", borderRadius: 0.75,
+                        bgcolor: moreAnchor ? "action.hover" : "transparent", px: 0.75, py: 0.125, cursor: "pointer",
                         "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
                       }}
                     >
                       {`+${rest} more`}
+                      <Iconify icon={moreAnchor ? "solar:alt-arrow-up-linear" : "solar:alt-arrow-down-linear"} width={11} />
                     </Typography>
-                  </Tooltip>
+                    {/* The rest of the legend, in a dropdown — same dot, full
+                        name, and hovering one lifts its line like the legend
+                        items above. */}
+                    <Popover
+                      open={!!moreAnchor}
+                      anchorEl={moreAnchor}
+                      onClose={() => { setMoreAnchor(null); setFocusEvalId(null); }}
+                      anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                      transformOrigin={{ vertical: "top", horizontal: "right" }}
+                      slotProps={{ paper: { sx: { mt: 0.5, py: 0.5, minWidth: 220, maxWidth: 380, maxHeight: 300, borderRadius: 1.25 } } }}
+                    >
+                      {shown.slice(room).map((e) => (
+                        <Stack
+                          key={e.id}
+                          direction="row" alignItems="center" spacing={1}
+                          onMouseEnter={() => setFocusEvalId(e.id)}
+                          onMouseLeave={() => setFocusEvalId(null)}
+                          onClick={() => { toggleIsolate(e.id); setMoreAnchor(null); setFocusEvalId(null); }}
+                          sx={{
+                            px: 1.5, py: 0.75, cursor: "pointer",
+                            bgcolor: isolatedEvalId === e.id ? "action.selected" : "transparent",
+                            "&:hover": { bgcolor: isolatedEvalId === e.id ? "action.selected" : "action.hover" },
+                          }}
+                        >
+                          <LegendDot color={e.color} />
+                          <Typography sx={{ typography: "s2", color: "text.primary", wordBreak: "break-word", flex: 1 }}>
+                            {e.name}
+                          </Typography>
+                          {isolatedEvalId === e.id && (
+                            <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>only this</Typography>
+                          )}
+                        </Stack>
+                      ))}
+                    </Popover>
+                  </>
                 )}
               </Stack>
             );
@@ -540,100 +671,143 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
         </Stack>
 
         <Box sx={{ px: 0, pt: 0.5, pb: 0.5, width: "100%" }}>
-          <ReactApexChart
-            type="line"
-            height={160}
-            width="100%"
-            series={chartData.series.map((x) => ({ name: x.name, data: x.data }))}
-            options={{
-              chart: {
-                toolbar: { show: false },
-                zoom: { enabled: false },
-                animations: { enabled: false },
-                fontFamily: theme.typography.fontFamily,
-                background: "transparent",
-                parentHeightOffset: 0,
-                sparkline: { enabled: false },
-              },
-              theme: { mode: theme.palette.mode },
-              colors: chartData.series.map((x) => x.color),
-              stroke: { width: 2, curve: "straight" },
-              markers: (() => {
-                /* Discrete markers: manual runs get a larger opaque dot,
-                   trials a smaller subtler one — the eye reads the line as
-                   "manual runs are the anchors, trials fill in between".
-                   Same colour per series so the trend stays coherent. */
-                const discrete = [];
-                mergedRaw.forEach((r, i) => {
-                  chartData.series.forEach((s, si) => {
-                    discrete.push({
-                      seriesIndex: si,
-                      dataPointIndex: i,
-                      fillColor: s.color,
-                      strokeColor: s.color,
-                      size: r.kind === "trial" ? 2 : 4,
-                      shape: "circle",
-                    });
-                  });
+          {(() => {
+            /* A clicked legend item shows only that eval's line. */
+            const isolated = isolatedEvalId && chartData.series.some((x) => x.id === isolatedEvalId) ? isolatedEvalId : null;
+            const visible = isolated ? chartData.series.filter((x) => x.id === isolated) : chartData.series;
+            const focus = !isolated && focusEvalId && visible.some((x) => x.id === focusEvalId) ? focusEvalId : null;
+            /* Hovering an eval in the legend draws it last (on top) and fades the rest. */
+            const ordered = focus
+              ? [...visible.filter((x) => x.id !== focus), ...visible.filter((x) => x.id === focus)]
+              : visible;
+            const colorOf = (x) => (focus && x.id !== focus ? alpha(x.color, 0.18) : x.color);
+
+            /*
+              Evals that score the same on every run draw exactly the same
+              line, so only the one drawn last shows. Those lines — and only
+              those — are dashed with the same pattern, each shifted along by
+              one segment, so the colours take turns: green, blue, orange,
+              pink, green… The shared line reads as striped, every eval on it
+              is visible, and lines that don't overlap stay solid. The line
+              stays exactly on the score — nothing is moved. Hovering or
+              isolating an eval draws it solid on its own.
+            */
+            const stripeGroups = (() => {
+              if (singleRun || focus || isolated) return [];
+              const byLine = new Map();
+              ordered.forEach((x, i) => {
+                if (x.data.filter((v) => v != null).length < 2) return;
+                const key = JSON.stringify(x.data);
+                if (!byLine.has(key)) byLine.set(key, []);
+                byLine.get(key).push(i);
+              });
+              return [...byLine.values()].filter((idx) => idx.length > 1);
+            })();
+            /* The chart library takes one dash length per line but no offset,
+               so the offset is set on the drawn paths after each render. */
+            const applyStripes = (ctx) => {
+              const root = ctx?.el;
+              if (!root) return;
+              stripeGroups.forEach((idx) => {
+                const n = idx.length;
+                idx.forEach((si, k) => {
+                  const path = root.querySelector(`.apexcharts-series[data\\:realIndex="${si}"] path.apexcharts-line`);
+                  if (!path) return;
+                  path.setAttribute("stroke-dasharray", `${STRIPE} ${STRIPE * (n - 1)}`);
+                  path.setAttribute("stroke-dashoffset", String(((n - k) % n) * STRIPE));
                 });
-                return { size: 0, strokeWidth: 0, hover: { size: 5 }, discrete };
-              })(),
-              legend: { show: false },
-              dataLabels: { enabled: false },
-              grid: {
-                borderColor: theme.palette.divider,
-                strokeDashArray: 4,
-                xaxis: { lines: { show: false } },
-                /* Zero right-padding pushes the last plotted point to the
-                   edge of the card, so the chart reads as filling the
-                   available width. */
-                padding: { left: 0, right: 0, top: 0, bottom: 0 },
-              },
-              xaxis: {
-                /*
-                  A subset run belongs on the line — it happened — but a point
-                  from four scenarios sitting at 100% next to one from
-                  seventeen invites exactly the wrong read. It cannot be hidden
-                  without the history lying by omission, so it is labelled.
-                  Trials are appended after the manual runs; the chart shows
-                  the recovery a self improvement produces rather than ending
-                  on the last manual run's decline.
-                */
-                categories: chartData.categories,
-                axisBorder: { show: false },
-                axisTicks: { show: false },
-                labels: {
-                  style: { colors: theme.palette.text.secondary, fontSize: "11px" },
-                  rotate: 0,
-                  hideOverlappingLabels: true,
-                  trim: false,
-                },
-                tooltip: { enabled: false },
-              },
-              yaxis: {
-                min: 0, max: 100, tickAmount: 2,
-                labels: { style: { colors: theme.palette.text.secondary, fontSize: "11px" }, formatter: (v) => `${Math.round(v)}` },
-              },
-              tooltip: {
-                shared: true,
-                intersect: false,
-                x: {
-                  formatter: (val, opts) => {
-                    const idx = opts?.dataPointIndex ?? -1;
-                    return chartData.categoriesFull?.[idx] || `${val}`;
+              });
+            };
+            return (
+              <ReactApexChart
+                key={singleRun ? "bars" : "lines"}
+                type={singleRun ? "bar" : "line"}
+                height={CHART_HEIGHT}
+                width="100%"
+                series={ordered.map((x) => ({ name: x.name, data: x.data }))}
+                options={{
+                  chart: {
+                    toolbar: { show: false },
+                    zoom: { enabled: false },
+                    animations: { enabled: false },
+                    fontFamily: theme.typography.fontFamily,
+                    background: "transparent",
+                    parentHeightOffset: 0,
+                    events: { mounted: applyStripes, updated: applyStripes },
                   },
-                },
-                y: {
-                  formatter: (v, opts) => {
-                    if (v == null) return "\u2014";
-                    const run = mergedRaw[opts?.dataPointIndex ?? -1];
-                    const partial = run && run.total < envState.scenarios.length;
-                    return `${v}%${partial ? ` · ${run.total} of ${envState.scenarios.length} scenarios` : ""}${run?.kind === "trial" ? " · trial" : ""}`;
+                  theme: { mode: theme.palette.mode },
+                  colors: ordered.map(colorOf),
+                  ...(singleRun ? {
+                    plotOptions: {
+                      bar: {
+                        /* Narrow bars side by side: wide enough to read,
+                           never a slab across half the card. */
+                        columnWidth: `${Math.min(36, 7 * ordered.length)}%`,
+                        borderRadius: 3,
+                        borderRadiusApplication: "end",
+                        dataLabels: { position: "top" },
+                      },
+                    },
+                  } : {}),
+                  /* Bars: a transparent outline is the gap between them.
+                     Lines: an eval with a single point in view has no line
+                     to draw — and the chart library draws one anyway, from
+                     the point down to the axis — so it gets its dot only. */
+                  stroke: singleRun
+                    ? { show: true, width: 4, colors: ["transparent"] }
+                    : {
+                      width: ordered.map((x) => (x.data.filter((v) => v != null).length >= 2 ? 2 : 0)),
+                      curve: "straight",
+                    },
+                  markers: singleRun ? { size: 0 } : { size: 4, strokeWidth: 0, hover: { size: 6 } },
+                  legend: { show: false },
+                  dataLabels: singleRun ? {
+                    enabled: true,
+                    formatter: (v) => (v == null ? "" : `${v}%`),
+                    offsetY: -16,
+                    style: { fontSize: "11px", fontWeight: 600, colors: [theme.palette.text.secondary] },
+                  } : { enabled: false },
+                  grid: {
+                    borderColor: theme.palette.divider,
+                    strokeDashArray: 4,
+                    xaxis: { lines: { show: false } },
+                    padding: { left: 8, right: 16, top: 8, bottom: 0 },
                   },
-                },
-              },
-            }}
-          />
+                  xaxis: {
+                    categories: chartData.categories,
+                    axisBorder: { show: false },
+                    axisTicks: { show: false },
+                    labels: {
+                      style: { colors: theme.palette.text.secondary, fontSize: "11px" },
+                      rotate: 0,
+                      hideOverlappingLabels: true,
+                      trim: false,
+                    },
+                    tooltip: { enabled: false },
+                  },
+                  yaxis: {
+                    min: 0, max: 100, tickAmount: 4,
+                    labels: { style: { colors: theme.palette.text.secondary, fontSize: "11px" }, formatter: (v) => `${Math.round(v)}` },
+                  },
+                  tooltip: {
+                    shared: !singleRun,
+                    intersect: singleRun,
+                    y: {
+                      /* A subset run belongs on the line — it happened — but
+                         a point from four scenarios next to one from
+                         seventeen invites the wrong read, so it's labelled. */
+                      formatter: (v, opts) => {
+                        if (v == null) return "—";
+                        const run = chartData.runs[opts?.dataPointIndex ?? -1];
+                        const partial = run && run.total < envState.scenarios.length;
+                        return `${v}%${partial ? ` · ${run.total} of ${envState.scenarios.length} scenarios` : ""}${run?.kind === "trial" ? " · trial" : ""}`;
+                      },
+                    },
+                  },
+                }}
+              />
+            );
+          })()}
         </Box>
 
         {/* ── did the fix do what it was projected to do ── */}
@@ -712,8 +886,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
 
               {/* One run is a baseline; two or more is a comparison. Offering
                   both at once would ask people to work out which button their
-                  selection is even eligible for. */}
-              {selected.length === 1 ? (
+                  selection is even eligible for. A queued run is neither — with
+                  one in the selection, only Delete applies to it. */}
+              {selected.length === 1 && !selectedQueued ? (
                 <Button
                   variant="contained" color="primary" size="small"
                   onClick={setBaseline}
@@ -722,7 +897,7 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                 >
                   {selected[0] === baselineId ? "Clear baseline" : "Set as baseline"}
                 </Button>
-              ) : (
+              ) : selectedFinished.length >= 2 && !selectedQueued && (
                 <Button
                   variant="contained" color="primary" size="small"
                   onClick={compare}
@@ -794,7 +969,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
               <Head right title="Mean return — the environment's reward, averaged over tasks">Return</Head>
               {evals.map((e, i) => (
                 <Head key={e.id} right divider={i === 0} last={i === evals.length - 1} title={e.name} wrap>
-                  {e.name}
+                  {/* snake_case names are one long word — a break opportunity
+                      after each underscore lets them wrap like the rest. */}
+                  {e.name.replace(/_/g, "_​")}
                 </Head>
               ))}
             </Box>
@@ -815,8 +992,14 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                         borderLeft: "2px solid", borderColor: "transparent",
                       }}
                     >
-                      <Box sx={{ display: "flex", alignItems: "center" }}>
-                        <Checkbox size="small" disabled checked={false} tabIndex={-1} sx={{ p: 0.5, ...neutralCheckboxSx }} />
+                      <Box
+                        sx={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                        onClick={() => toggle(r.id)}
+                      >
+                        <Checkbox
+                          size="small" checked={picked} readOnly tabIndex={-1}
+                          sx={{ p: 0.5, pointerEvents: "none", ...neutralCheckboxSx }}
+                        />
                       </Box>
                       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0, py: 0.875, pr: 1.5, overflow: "hidden" }}>
                         <Box
@@ -831,15 +1014,10 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                           {r.letter}
                         </Box>
                         <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ minWidth: 0, overflow: "hidden" }}>
-                          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flexShrink: 0 }}>
                             Run {r.ordinal} · agent {r.agentVersion}
-                            <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500 }}>
-                              {" "}× env {r.envVersion}
-                            </Box>
                           </Typography>
-                          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
-                            waiting to start
-                          </Typography>
+                          <RunDetail text={`× env ${r.envVersion} · waiting to start`} />
                         </Stack>
                       </Stack>
                       <StatusCell status="Queued" />
@@ -913,15 +1091,8 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                         <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ minWidth: 0, overflow: "hidden" }}>
                           <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flexShrink: 0 }}>
                             Run {r.ordinal} · agent {r.agentVersion}
-                            {r.envVersion && (
-                              <Box component="span" sx={{ color: "text.subtitle", fontWeight: 500 }}>
-                                {" "}× env {r.envVersion}
-                              </Box>
-                            )}
                           </Typography>
-                          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
-                            {runTimeLabel(r)}
-                          </Typography>
+                          <RunDetail text={[r.envVersion && `× env ${r.envVersion}`, runTimeLabel(r)].filter(Boolean).join(" · ")} />
                           {r.toolGap?.length > 0 && (
                             <Tooltip
                               arrow
@@ -1046,34 +1217,19 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
                       */}
                       <Box minWidth={0} sx={{ display: "flex", alignItems: "center", minWidth: 0, overflow: "hidden" }}>
                         <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ minWidth: 0, overflow: "hidden" }}>
-                          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {/* The run's name never shrinks — "Ru…" identifies
+                              nothing. The env version it was pinned to and
+                              the timestamp are the detail, so they are what
+                              truncates when the column is narrow (the full
+                              text stays in the tooltip). Env is only shown
+                              if the run recorded one; older runs omit it
+                              rather than reading as "env unknown". Short
+                              timestamp, no task count: every run here runs
+                              the same scenarios. */}
+                          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, flexShrink: 0 }}>
                             Run {r.ordinal} · agent {r.agentVersion}
-                            {/* Env version stamped on the run — pinned
-                                at start, not inferred later. Only shown
-                                if the run recorded one; older runs
-                                without the field omit it silently rather
-                                than reading as "env unknown". */}
-                            {r.envVersion && (
-                              <Box
-                                component="span"
-                                sx={{ color: "text.subtitle", fontWeight: 500 }}
-                              >
-                                {" "}× env {r.envVersion}
-                              </Box>
-                            )}
                           </Typography>
-                          {/* On one line. Two lines per row doubled the height
-                              of the table for a timestamp nobody scans. */}
-                          {/* Short form, and no task count: every run of this
-                              environment runs the same scenarios, so printing
-                              "7 tasks" on all five rows says nothing. */}
-                          {/* Fixed rather than shrinkable: the chips beside it
-                              are flex-shrink-0, so a row with enough of them
-                              squeezed the timestamp to zero width and the run
-                              silently lost its date. */}
-                          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
-                            {runTimeLabel(r)}
-                          </Typography>
+                          <RunDetail text={[r.envVersion && `× env ${r.envVersion}`, runTimeLabel(r)].filter(Boolean).join(" · ")} />
                           {r.toolGap?.length > 0 && (
                             <Tooltip
                               arrow
@@ -1225,7 +1381,9 @@ export default function RunsSummary({ env, envState, onGo, onStart }) {
         content={
           selectedHasTrials
             ? `${selectedManualOnly.length} manual run${selectedManualOnly.length === 1 ? "" : "s"} will be deleted. ${selected.length - selectedManualOnly.length} self-improvement trial${selected.length - selectedManualOnly.length === 1 ? "" : "s"} will be left alone — trials live under their search and are removed by deleting the self improvement.`
-            : "Their results go with them, and anything measured against them — a baseline, a winner — is cleared. The scenarios and the environment are untouched."
+            : selectedQueued && selectedFinished.length === 0
+              ? "It hasn't started, so it comes off the queue and there are no results to lose."
+              : `Their results go with them, and anything measured against them — a baseline, a winner — is cleared. The scenarios and the environment are untouched.${selectedQueued ? " The queued run comes off the queue before it starts." : ""}`
         }
         action={
           <Button
@@ -1363,10 +1521,11 @@ RunsSummary.propTypes = {
    already say that. Same soft chip and colours as the legacy runs table
    (BaseStatusCellRenderer + shared statusStyles), so status reads the same
    everywhere in the product. */
-const STATUS_COL = 104;
+const STATUS_COL = 96;
 
 /* Prototype: show one queued run on top of the table so the status is demoable. */
 const DEMO_QUEUED_ROW = true;
+const QUEUED_ID = "demo-queued";
 
 /* Recorded runs carry status "running" until they finish, then "passed" /
    "failed" — which is the verdict, not the state. Trials are always done. */
@@ -1437,7 +1596,12 @@ function Head({ children, right, divider, last, title, wrap }) {
            grader names may wrap on word boundaries, never mid-word. */
         overflow: "hidden",
         ...(wrap
-          ? { whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal" }
+          ? {
+            whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal",
+            /* Two lines at most; a longer name ends in an ellipsis and the
+               full name is in the tooltip. */
+            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+          }
           : { whiteSpace: "nowrap", textOverflow: "ellipsis" }),
         /* The graders are a different kind of number from the system ones, and
            a single hairline says so more quietly than a second header row. */
@@ -1618,6 +1782,28 @@ ScoreCell.propTypes = {
   value: PropTypes.number, deltaWidth: PropTypes.number,
   delta: PropTypes.object, divider: PropTypes.bool, last: PropTypes.bool,
 };
+
+/* A run's env pairing and timestamp — the part of its name that gives way,
+   with an ellipsis and the full text on hover, when the column is narrow. */
+function RunDetail({ text }) {
+  return (
+    <Tooltip arrow title={text} placement="top-start">
+      <Typography
+        noWrap
+        sx={{ typography: "s3", color: "text.subtitle", minWidth: 0, flex: "0 1 auto", overflow: "hidden", textOverflow: "ellipsis" }}
+      >
+        {text}
+      </Typography>
+    </Tooltip>
+  );
+}
+RunDetail.propTypes = { text: PropTypes.string };
+
+/** A legend key: the eval's colour as a dot. */
+function LegendDot({ color }) {
+  return <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} />;
+}
+LegendDot.propTypes = { color: PropTypes.string };
 
 function Line({ label, value }) {
   return (

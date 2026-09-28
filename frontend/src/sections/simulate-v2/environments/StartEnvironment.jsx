@@ -105,16 +105,32 @@ export default function StartEnvironment({ entry = false }) {
           </Box>
         </Stack>
         <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-          <Button
-            size="small"
-            variant="contained"
-            color="primary"
-            onClick={() => pick("scratch")}
-            startIcon={<Iconify icon="solar:document-add-linear" width={13} />}
-            sx={{ typography: "s2", fontWeight: 700 }}
-          >
-            Start from scratch
-          </Button>
+          {entry && tab === "my" ? (
+            /* From the list, the way to a new environment is one click —
+               not a trip back to the other tab. (Start from scratch opened
+               a panel on the Build tab, so here it did nothing visible.) */
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              onClick={() => setTab("build")}
+              startIcon={<Iconify icon="solar:add-circle-linear" width={14} />}
+              sx={{ typography: "s2", fontWeight: 700 }}
+            >
+              Build environment
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              onClick={() => pick("scratch")}
+              startIcon={<Iconify icon="solar:document-add-linear" width={13} />}
+              sx={{ typography: "s2", fontWeight: 700 }}
+            >
+              Start from scratch
+            </Button>
+          )}
         </Stack>
       </Stack>
 

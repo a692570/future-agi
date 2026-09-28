@@ -135,6 +135,38 @@ export function ScriptThumb() {
   );
 }
 
+/** AI generate — a depth picked, and new scenarios being written. */
+export function GenerateThumb() {
+  const c = usePalette();
+  /* Four-point sparkle, centred on (x, y). */
+  const sparkle = (x, y, r) =>
+    `M${x} ${y - r}Q${x + r * 0.18} ${y - r * 0.18} ${x + r} ${y}Q${x + r * 0.18} ${y + r * 0.18} ${x} ${y + r}Q${x - r * 0.18} ${y + r * 0.18} ${x - r} ${y}Q${x - r * 0.18} ${y - r * 0.18} ${x} ${y - r}Z`;
+  return (
+    <Card c={c}>
+      <path d={sparkle(30, 22, 5)} fill={c.accent} />
+      <text x="40" y="25" fontFamily={FONT} fontSize="7.5" fontWeight="700" fill={c.text}>Generate</text>
+      <rect x="128" y="17" width="22" height="10" rx="5" fill={c.line} />
+      <text x="133" y="24.5" fontFamily={FONT} fontSize="6" fill={c.muted}>~20</text>
+      <line x1="26" y1="33" x2="150" y2="33" stroke={c.line} strokeWidth="1" />
+
+      {/* depth — Standard picked */}
+      <rect x="26" y="38" width="36" height="11" rx="3" fill="none" stroke={c.line} strokeWidth="1" />
+      <text x="44" y="45.5" textAnchor="middle" fontFamily={FONT} fontSize="5.5" fill={c.muted}>Smoke</text>
+      <rect x="66" y="38" width="44" height="11" rx="3" fill={c.tint} stroke={c.accent} strokeWidth="0.75" />
+      <text x="88" y="45.5" textAnchor="middle" fontFamily={FONT} fontSize="5.5" fill={c.accent}>Standard</text>
+      <rect x="114" y="38" width="36" height="11" rx="3" fill="none" stroke={c.line} strokeWidth="1" />
+      <text x="132" y="45.5" textAnchor="middle" fontFamily={FONT} fontSize="5.5" fill={c.muted}>Deep</text>
+
+      {/* scenarios arriving — the newest still being written */}
+      <circle cx="30" cy="59" r="3" fill={c.accent} />
+      <rect x="38" y="56.5" width="76" height="5" rx="2.5" fill={c.accent} opacity="0.45" />
+      <circle cx="30" cy="73" r="3" fill="none" stroke={c.solid} strokeWidth="1" />
+      <rect x="38" y="70.5" width="54" height="5" rx="2.5" fill={c.line} />
+      <path d={sparkle(100, 73, 3)} fill={c.accent} opacity="0.7" />
+    </Card>
+  );
+}
+
 /** From production — clustered failing traces from the Error Feed. */
 export function ProductionThumb() {
   const c = usePalette();

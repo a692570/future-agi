@@ -211,26 +211,101 @@ export function productionClustersFor(env) {
     productionEnv: env.id,
   });
 
-  return clusters;
+  return clusters.map((c, i) => ({ ...c, cases: casesFor(c, seed + i) }));
 }
 
+/*
+  A cluster is every trace that failed the same way — but not every trace
+  in it failed in the same situation. `lookup_order::TypeError` can come
+  from a dashed order number, a typo, or an email given instead of an ID;
+  an agent can be fixed for one and still fall over on the others.
+
+  So a cluster splits into its distinct cases, and each case — not each
+  trace — becomes a scenario. One scenario per trace would test the same
+  thing dozens of times; one per cluster would pass while two of its three
+  situations still fail.
+
+  Real grouping would come from the traces themselves (the input that
+  triggered the tool call, the caller's move before the rule broke). Here
+  it's templated per failure kind, rotated per cluster so two clusters of
+  the same kind don't read identically.
+*/
+const CASE_TEMPLATES = {
+  tool_call_error: [
+    { key: "format", label: "Value in a format the tool doesn't accept", quote: "user: it's 44-29, with a dash" },
+    { key: "typo", label: "Typo or swapped digits in the value", quote: "user: no listen my order number is 4429 not 4249" },
+    { key: "other-id", label: "A different identifier than the tool expects", quote: "user: i don't have the number, use my email" },
+  ],
+  loop: [
+    { key: "timeout", label: "Tool times out", quote: "(tool timed out — agent called it again, 6 times)" },
+    { key: "empty", label: "Tool returns an empty result", quote: "(tool returned nothing — agent retried with the same args)" },
+    { key: "rejected", label: "Tool rejects the input", quote: "user: i tried three times, can you just do it" },
+  ],
+  policy_violation: [
+    { key: "prior-approval", label: "Caller claims someone already approved it", quote: "user: my manager already said yes" },
+    { key: "emergency", label: "Caller pleads a personal emergency", quote: "user: my kid is sick, can we skip the check just this once" },
+    { key: "insists", label: "Caller keeps insisting after a refusal", quote: "user: no i want a refund, the WHOLE amount" },
+  ],
+  hallucination: [
+    { key: "no-date", label: "Tool gives no date — agent invents one", quote: "agent: your refund will arrive by tuesday" },
+    { key: "no-amount", label: "Tool gives no amount — agent invents one", quote: "agent: you'll get $84.20 back today" },
+  ],
+  off_task: [
+    { key: "complaint", label: "Caller opens with an unrelated complaint", quote: "user: before anything, your last driver was so rude" },
+    { key: "small-talk", label: "Caller drifts into small talk", quote: "user: anyway how's your day going, mine's been awful" },
+  ],
+};
+
+/* How a cluster's traces spread across its cases — the most common case
+   first, the long tail last. */
+const SPLITS = { 1: [1], 2: [0.65, 0.35], 3: [0.55, 0.3, 0.15] };
+
+function casesFor(c, seed) {
+  const templates = CASE_TEMPLATES[c.kind] || [];
+  if (!templates.length) return [];
+  /* Small clusters rarely hold more than one situation; big ones do. */
+  const n = Math.min(templates.length, c.count < 15 ? 1 : c.count < 30 ? 2 : 3);
+  const shares = SPLITS[n];
+  let left = c.count;
+  return shares.map((share, i) => {
+    const t = templates[(seed + i) % templates.length];
+    const traceCount = i === n - 1 ? left : Math.max(1, Math.round(c.count * share));
+    left -= traceCount;
+    return {
+      id: t.key,
+      label: t.label,
+      quote: t.quote,
+      traceCount,
+      /* A few trace ids per case, so a scenario that fails later can point
+         back at the real calls it came from. */
+      traceIds: [0, 1, 2].slice(0, Math.min(3, traceCount))
+        .map((k) => `tr_${hash(`${c.id}:${t.key}:${k}`).toString(16).slice(0, 7)}`),
+    };
+  });
+}
+
+/** Scenario id for one case of one cluster — stable, so re-imports are caught. */
+export const productionScenarioId = (cluster, kase) => `from-prod::${cluster.id}::${kase.id}`;
+
+const slug = (s) => s.toLowerCase().replace(/::/g, "-").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 /**
- * Turn a set of clusters into scenarios that can be dropped into
- * envState.scenarios. Each keeps a link back to its cluster so the
- * scenario detail can say "reproduced from cluster X, last seen Y".
+ * Turn picked cases into scenarios that can be dropped into
+ * envState.scenarios — one per case. Each keeps a link back to its cluster,
+ * its case and the traces it came from, so the scenario detail can say
+ * "reproduces case Y of cluster X, seen N times".
+ *
+ * `picks` is [{ cluster, cases: [case, …] }].
  */
-export function scenariosFromClusters(clusters) {
-  return clusters.map((c) => ({
-    id: `from-prod::${c.id}`,
+export function scenariosFromCases(picks) {
+  return picks.flatMap(({ cluster: c, cases }) => cases.map((k) => ({
+    id: productionScenarioId(c, k),
     useCase: c.useCase,
-    name: c.fingerprint
-      .toLowerCase()
-      .replace(/::/g, "-")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, ""),
+    name: `${slug(c.fingerprint)}-${k.id}`,
     summary: c.title,
-    title: c.title,
+    title: `${c.title} — ${k.label.charAt(0).toLowerCase()}${k.label.slice(1)}`,
     task: `Reproduces a real production failure: ${c.why}`,
+    situation: `${k.label}. Seen in ${k.traceCount} production trace${k.traceCount === 1 ? "" : "s"} — e.g. “${k.quote}”`,
     persona: c.persona,
     expected: `Agent handles this the correct way — no ${c.kindLabel.toLowerCase()}, no repeat of the cluster.`,
     turns: 8,
@@ -245,6 +320,10 @@ export function scenariosFromClusters(clusters) {
       firstSeen: c.firstSeen,
       lastSeen: c.lastSeen,
       severity: c.severity,
+      caseId: k.id,
+      caseLabel: k.label,
+      traceCount: k.traceCount,
+      traceIds: k.traceIds,
     },
-  }));
+  })));
 }

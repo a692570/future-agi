@@ -320,7 +320,7 @@ const STAGES = {
   understand: (source) => ({
     title: "Understanding the agent",
     steps: [
-      think(`Reading ${source.value} — entrypoint, tool registry, prompt package.`),
+      think(`Reading ${source.value || source.repoUrl || (source.agentId ? `${source.provider || "the platform"} agent ${source.agentId}` : "the agent")} — entrypoint, tool registry, prompt package.`),
       tool("read_source", "142 files · Python 3.12 · Dockerfile, db/schema.sql"),
       think("Taking each tool's signature from the code rather than its name, so the arguments and their permitted values are exact."),
       tool("extract_tools", toolsOfSource(source).length

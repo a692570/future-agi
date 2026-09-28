@@ -4,10 +4,12 @@
  *
  * A caller emits a scaffold; the AssistantConsole subscribes and
  * pins a compact skill pill above its text field. Each scaffold is
- * `{ label, prompt, icon? }`: the label is what the pill shows,
- * the prompt is what actually gets prepended to the outgoing
- * message on send. Legacy callers can still pass a bare string —
- * that string is used for both fields.
+ * `{ label, prompt, icon?, placeholder? }`: the label is what the pill
+ * shows, the prompt is what actually gets prepended to the outgoing
+ * message on send, and the placeholder (optional) replaces the input's
+ * hint while the pill is pinned — so a skill can say what to type next.
+ * Legacy callers can still pass a bare string — that string is used for
+ * both label and prompt.
  */
 
 const listeners = new Set();
@@ -35,7 +37,7 @@ function normalize(input) {
     const label = (input.label || "").toString().trim();
     const prompt = (input.prompt || input.label || "").toString().trim();
     if (!label || !prompt) return null;
-    return { label, prompt, icon: input.icon || null };
+    return { label, prompt, icon: input.icon || null, placeholder: input.placeholder || null };
   }
   return null;
 }

@@ -32,13 +32,18 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
   */
   const [scaffolds, setScaffolds] = useState([]);
   const endRef = useRef(null);
+  const inputRef = useRef(null);
 
+  /* A pinned chip means "type here next" — so the cursor goes to the input. */
   useEffect(
     () => subscribeComposerScaffold((s) => {
       setScaffolds((prev) => (prev.some((x) => x.label === s.label) ? prev : [...prev, s]));
+      setTimeout(() => inputRef.current?.focus(), 80);
     }),
     [],
   );
+  /* The newest chip that says what to type takes over the input's hint. */
+  const scaffoldHint = [...scaffolds].reverse().find((s) => s.placeholder)?.placeholder;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -263,7 +268,8 @@ export default function StudioConsole({ turns, running, chips, onSend, onChip, p
             multiline
             maxRows={8}
             variant="standard"
-            placeholder={frozen ? (frozenReason || "Environment is not live yet") : "Reply to the builder…"}
+            placeholder={frozen ? (frozenReason || "Environment is not live yet") : (scaffoldHint || "Reply to the builder…")}
+            inputRef={inputRef}
             value={draft}
             disabled={blocked}
             onChange={(e) => setDraft(e.target.value)}

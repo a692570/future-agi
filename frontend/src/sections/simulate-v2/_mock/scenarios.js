@@ -6,6 +6,8 @@
  * it was never actually runnable. One row = one task the agent must complete.
  */
 
+import { sandboxFit } from "./datasetWorld";
+
 /** Persona traits we surface as chips on a scenario row. */
 export const PERSONA_TRAITS = [
   "impatient", "polite", "confused", "angry", "elderly", "accented",
@@ -485,6 +487,76 @@ export const generatedPool = (env) => {
   ];
 };
 
+/*
+  The ways one described situation plays out differently — the same ask met
+  by a calm first-timer, someone already refused, someone vague, someone in a
+  rush, someone who wants a supervisor. Each is a distinct test, which is
+  what makes several of them worth writing rather than one.
+*/
+const DESCRIBED_VARIANTS = [
+  {
+    suffix: "first-time", summary: "First time it's happened, wants it fixed today", tone: "calm",
+    task: (d) => `A caller raises this for the first time: ${d}. They're calm but want it resolved on this call.`,
+    expected: "Agent resolves it within policy, using the right tools, and confirms the outcome with the caller.",
+    turnsAdd: 0,
+  },
+  {
+    suffix: "pushes-back", summary: "Already refused once, pushes back hard", tone: "frustrated",
+    task: (d) => `The caller has already been turned down once about this — ${d} — and pushes back hard for a different answer.`,
+    expected: "Agent holds to policy under pressure, explains why, and offers the route that is actually available.",
+    turnsAdd: 3,
+  },
+  {
+    suffix: "missing-details", summary: "Leaves out details the agent needs", tone: "confused",
+    task: (d) => `The caller brings this up — ${d} — but leaves out details the agent needs, so it has to ask before acting.`,
+    expected: "Agent asks for what's missing before acting, then resolves it without guessing.",
+    turnsAdd: 2,
+  },
+  {
+    suffix: "in-a-hurry", summary: "In a hurry, wants it done in one step", tone: "in a hurry",
+    task: (d) => `The caller is in a rush about this — ${d} — and wants it handled in one step, skipping checks if they can.`,
+    expected: "Agent stays on process despite the rush and closes the call with the outcome confirmed.",
+    turnsAdd: 1,
+  },
+  {
+    suffix: "escalates", summary: "Asks for a supervisor straight away", tone: "sceptical",
+    task: (d) => `The caller opens by asking for a supervisor about this — ${d} — before the agent has tried anything.`,
+    expected: "Agent tries to resolve it first and escalates through the documented path only if it has to.",
+    turnsAdd: 2,
+  },
+];
+
+/**
+ * Scenarios written from what someone described in the builder chat
+ * ("callers disputing a double charge") — one per distinct way that
+ * situation plays out, grouped under the description as their goal.
+ * Distinct ids per ask, so describing the same thing twice adds a new batch
+ * rather than colliding.
+ */
+export const scenariosFromDescription = (env, description, count = 3) => {
+  if (!env || !description) return [];
+  const d = description.trim().replace(/[.\s]+$/, "");
+  const goal = d.charAt(0).toUpperCase() + d.slice(1);
+  const stamp = Date.now().toString(36);
+  const slug = kebab(d).split("-").slice(0, 5).join("-");
+  return DESCRIBED_VARIANTS.slice(0, Math.max(1, Math.min(count, DESCRIBED_VARIANTS.length))).map((v, i) => {
+    const persona = personaForTone(env, v.tone, i);
+    return {
+      id: `${env.id}-desc-${slug}-${stamp}-${v.suffix}`,
+      useCase: goal,
+      name: `${firstName(persona)}-${slug}-${v.suffix}`,
+      summary: v.summary,
+      title: `${goal} — ${v.summary.charAt(0).toLowerCase()}${v.summary.slice(1)}`,
+      task: v.task(d),
+      situation: v.task(d),
+      persona,
+      expected: v.expected,
+      outcome: v.expected,
+      turns: 5 + v.turnsAdd,
+    };
+  });
+};
+
 /**
  * Gaps between what the environment enforces and what a connected agent is
  * likely to know about — the findings shown before the generated scenarios.
@@ -520,38 +592,90 @@ export const packStats = (env) => {
   };
 };
 
+/* How a caller described as "frustrated" or "in a hurry" behaves — the
+   persona traits a tone column's value points at. */
+const TONE_TRAITS = [
+  [/frustrat|angry|annoyed|upset/, ["angry"]],
+  [/impatient|rush|hurry/, ["impatient", "in a hurry", "urgent"]],
+  [/confus|unsure/, ["confused", "unsure"]],
+  [/polite|calm|friendly/, ["polite", "formal"]],
+  [/chatty|talkative/, ["chatty"]],
+  [/scepti|skepti|suspicious|distrust/, ["sceptical", "asks for proof", "distrusts the numbers"]],
+];
+
+/** A persona whose behaviour matches a tone from the data; any persona when the tone says nothing. */
+export const personaForTone = (env, tone, i) => {
+  const pool = CONVERSATIONAL.includes(env?.surface) ? CUSTOMER_POOL : REQUESTER_POOL;
+  const hit = TONE_TRAITS.find(([re]) => re.test(String(tone || "").toLowerCase()));
+  const fits = hit ? pool.filter((p) => p.traits.some((t) => hit[1].includes(t))) : [];
+  const from = fits.length ? fits : pool;
+  return enrichPersona(from[i % from.length]);
+};
+
+/** Stable id for the scenario one dataset row becomes — keyed on the row's id, not its position. */
+export const datasetScenarioId = (env, dataset, rowId) => `${env.id}-ds-${dataset.id}-${rowId}`;
+
+/* A yes/no column can't be "matched" as text — it says what the agent should
+   do. Refusal columns are the common case; anything else reads as the fact. */
+const expectedFrom = (col, value) => {
+  if (col.type === "boolean") {
+    const yes = String(value).toLowerCase() === "true";
+    if (/refus|reject|decline|block/.test(col.key)) {
+      return yes ? "Agent refuses the request and stays within policy." : "Agent completes the request rather than refusing it.";
+    }
+    return `Expected ${col.label.replace(/_/g, " ")}: ${yes ? "yes" : "no"}.`;
+  }
+  return `Matches the recorded ${col.label}: "${value}".`;
+};
+
 /**
- * Turn dataset rows into runnable scenarios.
+ * Turn dataset rows into runnable scenarios — one row, one scenario.
  *
- * Only the columns the user ticked are used, and which column becomes the task
- * versus the pass condition comes from the column's declared role — so ticking
- * a different set genuinely changes the scenarios rather than relabelling them.
+ * Nothing is generated: each part of the scenario comes from the column the
+ * user mapped to it (`roles` is { columnKey: "prompt" | "expected" |
+ * "persona" | "account" | "record" | "context" | "ignore" }). The persona
+ * comes from a tone-like column when there is one; account details and
+ * records resolve against the sandbox (see datasetWorld) and ride along as
+ * fixtures when the scenario has to bring its own. Only what a row can't
+ * supply is filled in — a persona, or a generic pass condition.
+ *
+ * The rows are copied in: later edits to the dataset don't change these
+ * scenarios, so each one records the dataset version it came from.
  */
-export const scenariosFromDataset = (env, dataset, selectedKeys, rows) => {
-  if (!dataset || !selectedKeys?.length) return [];
+export const scenariosFromDataset = (env, dataset, roles, rows) => {
+  if (!dataset) return [];
+  const colOf = (role) => dataset.columns.find((c) => roles[c.key] === role);
+  const promptCol = colOf("prompt");
+  if (!promptCol) return [];
+  const expectedCol = colOf("expected");
+  const personaCol = colOf("persona");
+  const contextCols = dataset.columns.filter((c) => roles[c.key] === "context");
+  const importedAt = new Date().toISOString();
 
-  const cols = dataset.columns.filter((c) => selectedKeys.includes(c.key));
-  const promptCol = cols.find((c) => c.role === "prompt") || cols[0];
-  const expectedCol = cols.find((c) => c.role === "expected");
-  const contextCols = cols.filter((c) => c !== promptCol && c !== expectedCol);
-
-  return rows.map((row, i) => {
+  return rows.map((row) => {
+    const i = row.__i;
     const ask = String(row[promptCol.key] ?? "").trim();
-    const context = contextCols
-      .map((c) => `${c.label}: ${row[c.key]}`)
-      .join(" · ");
+    const context = contextCols.map((c) => `${c.label}: ${row[c.key]}`).join(" · ");
+    const fits = sandboxFit(env, dataset, roles, row);
+    const account = fits.filter((f) => f.role === "account").map((f) => `Caller's account: ${f.value}`);
+    const sandbox = fits.filter((f) => f.role === "record").map((f) => f.text);
 
     return {
-      id: `${env.id}-ds-${dataset.id}-${i}`,
+      id: datasetScenarioId(env, dataset, row.__id),
       title: ask.length > 68 ? `${ask.slice(0, 68)}…` : ask || `Row ${i + 1}`,
-      task: context ? `${ask} (${context})` : ask,
-      persona: personaFor(env, i),
+      task: ask,
+      situation: [...account, ...sandbox, context].filter(Boolean).join(" · ") || undefined,
+      persona: personaCol ? personaForTone(env, row[personaCol.key], i) : personaFor(env, i),
       expected: expectedCol
-        ? `Matches the recorded ${expectedCol.label}: "${row[expectedCol.key]}".`
+        ? expectedFrom(expectedCol, row[expectedCol.key])
         : "Agent completes the request as recorded in the dataset.",
       turns: 4 + (i % 7),
-      critical: expectedCol?.role === "expected" && i % 3 === 0,
+      critical: false,
       origin: dataset.name,
+      /* What this scenario brings into the sandbox when it runs, because the
+         seed has nothing equivalent. */
+      fixtures: fits.filter((f) => f.status === "added").map(({ table, value, role }) => ({ table, value, role })),
+      datasetRow: { dataset: dataset.id, rowId: row.__id, version: dataset.updated, importedAt },
     };
   });
 };

@@ -342,14 +342,41 @@ export const trialGroups = (envState) => {
   });
 };
 
+/* Colours a chart can tell apart, in the order they're handed out. */
+const SERIES_PALETTE = [
+  "#16A34A", "#7857FC", "#2563EB", "#EA580C", "#DB2777", "#0891B2",
+  "#CA8A04", "#DC2626", "#0D9488", "#65A30D", "#C026D3", "#525252",
+];
+
+/**
+ * One colour per eval, never shared. An eval keeps its own colour unless an
+ * earlier eval already has it; custom evals all default to the same purple
+ * and several catalog evals share a hue, so taking colours as-is drew four
+ * evals in two colours. Assigned in eval order, so the same set of evals
+ * always gets the same colours.
+ */
+const distinctColors = (evals) => {
+  const taken = new Set();
+  const next = () => SERIES_PALETTE.find((c) => !taken.has(c)) || SERIES_PALETTE[taken.size % SERIES_PALETTE.length];
+  return evals.map((e) => {
+    const own = e.color && !taken.has(e.color.toUpperCase()) ? e.color.toUpperCase() : null;
+    const c = own || next();
+    taken.add(c);
+    return c;
+  });
+};
+
 /** One series per eval across the runs — the trend above the table. */
-export const evalSeries = (summaries, envState) =>
-  evalsOf(envState).map((e) => ({
+export const evalSeries = (summaries, envState) => {
+  const evals = evalsOf(envState);
+  const colors = distinctColors(evals);
+  return evals.map((e, i) => ({
     id: e.id,
     name: e.name,
-    color: e.color,
+    color: colors[i],
     data: summaries.map((s) => (s.scores[e.id] == null ? null : s.scores[e.id])),
   }));
+};
 
 /* ── comparison ──────────────────────────────────────────────────────────── */
 

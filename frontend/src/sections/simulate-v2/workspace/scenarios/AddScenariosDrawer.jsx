@@ -9,7 +9,17 @@ import ScriptUpload from "./ScriptUpload";
 import ProductionImport from "./ProductionImport";
 import TwinScenarioPicker from "./TwinScenarioPicker";
 import GenerateScenarios from "./GenerateScenarios";
-import { DatasetThumb, ScriptThumb, ProductionThumb } from "./RouteThumbs";
+import { DatasetThumb, ScriptThumb, ProductionThumb, GenerateThumb } from "./RouteThumbs";
+import { injectComposerScaffold } from "../../_mock/composerScaffoldBus";
+
+/* The builder chat is the other way to add scenarios — say what's missing and
+   it writes them. This is the skill chip that hands the job over. */
+const ADD_IN_CHAT = {
+  label: "Add scenarios",
+  prompt: "Add scenarios",
+  icon: "solar:layers-minimalistic-linear",
+  placeholder: "Describe what's missing — e.g. callers disputing a double charge…",
+};
 
 /**
  * Add scenarios.
@@ -44,39 +54,18 @@ function TwinThumb() {
   );
 }
 
-/* Neutral thumb for the AI-generate route — matches the plain
-   monochrome of the other RouteThumbs rather than the twin's purple. */
-function GenerateThumb() {
-  return (
-    <Box
-      sx={{
-        width: 96, height: 60, borderRadius: 1.25,
-        display: "grid", placeItems: "center",
-        bgcolor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.14 : 0.06),
-      }}
-    >
-      <Iconify icon="solar:magic-stick-3-bold" width={26} sx={{ color: "text.primary" }} />
-    </Box>
-  );
-}
 
 const ROUTES = [
   {
-    id: "generate",
-    label: "AI generate",
-    blurb: "Six-axis pipeline (T · W · D · X · I · O) with a coverage dial and an optional red-team overlay.",
-    Thumb: GenerateThumb,
-  },
-  {
     id: "twin",
     label: "From twin services",
-    blurb: "Cross-service scenarios generated from your env's twin backing — Slack → Notion, Gmail → Salesforce, and more.",
+    blurb: "Scenarios that span more than one service — Slack → Notion, Gmail → Salesforce, and more.",
     Thumb: TwinThumb,
   },
   {
     id: "production",
     label: "From production",
-    blurb: "Promote failure clusters from the Error Feed. Every real regression becomes a permanent test.",
+    blurb: "Turn failure clusters from the Error Feed into permanent tests.",
     Thumb: ProductionThumb,
   },
   {
@@ -90,6 +79,12 @@ const ROUTES = [
     label: "Upload a script",
     blurb: "Drop in a call script, SOP or runbook and we pull out the scenarios it describes.",
     Thumb: ScriptThumb,
+  },
+  {
+    id: "generate",
+    label: "AI generate",
+    blurb: "Writes new scenarios across tasks, callers, moods and call quality.",
+    Thumb: GenerateThumb,
   },
 ];
 
@@ -112,6 +107,14 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
 
   const toggle = (id) => setRoute((r) => (r === id ? null : id));
 
+  /* Close, then pin the chip once the drawer is gone — a closing drawer hands
+     focus back to the button that opened it, which would pull the cursor
+     straight out of the chat. */
+  const describeInChat = () => {
+    close();
+    setTimeout(() => injectComposerScaffold(ADD_IN_CHAT), 260);
+  };
+
   return (
     <SideDrawer open={open} onClose={close} width={1120}>
       <Stack sx={{ height: "100%" }}>
@@ -128,9 +131,22 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
           <Box flex={1} minWidth={0}>
             <Typography sx={{ typography: "m2", fontWeight: 600 }}>Add scenarios</Typography>
             <Typography sx={{ typography: "s2", color: "text.subtitle" }}>
-              This environment&apos;s scenarios are already here. These add the ones derivation could not know to write.
+              This environment already has its scenarios. Add the ones it couldn&apos;t work out from your agent on its own.
             </Typography>
           </Box>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={describeInChat}
+            startIcon={<Iconify icon="solar:chat-round-line-linear" width={15} />}
+            sx={{
+              typography: "s2", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap",
+              color: "text.primary", borderColor: "divider",
+              "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
+            }}
+          >
+            Describe in chat
+          </Button>
           <IconButton size="small" onClick={close}>
             <Iconify icon="solar:close-circle-linear" width={18} sx={{ color: "text.subtitle" }} />
           </IconButton>
@@ -144,8 +160,8 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
         */}
         <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2.5, display: "flex", flexDirection: "column" }}>
           {/*
-            Cards always render; the active one shows a purple border
-            and tint. When one is picked, the picker renders directly
+            Cards always render; the active one shows the same border
+            and tint as the coverage-depth picks below. When one is picked, the picker renders directly
             below the grid rather than replacing it, so switching to a
             different route is one click, not click-back-click.
           */}
@@ -204,6 +220,14 @@ AddScenariosDrawer.propTypes = {
   onAdd: PropTypes.func,
 };
 
+/* The coverage-depth picks' selected tint, laid over a surface as an image so
+   it tints the thumb strip and the text area alike without flattening them
+   into one colour — the card keeps the same two-part shape selected or not. */
+const selectedTint = (t) => {
+  const c = alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.04);
+  return `linear-gradient(${c}, ${c})`;
+};
+
 function RouteCard({ route, active, onClick }) {
   const { Thumb } = route;
   return (
@@ -212,11 +236,11 @@ function RouteCard({ route, active, onClick }) {
       sx={{
         borderRadius: 1.5, overflow: "hidden", height: "100%", cursor: "pointer",
         border: "1px solid",
-        borderColor: active ? "#7857FC" : "divider",
+        borderColor: active ? "text.primary" : "divider",
         bgcolor: "background.paper",
-        transition: "border-color .16s ease, background-color .16s ease",
-        boxShadow: active ? (t) => `0 0 0 1px ${t.palette.mode === "dark" ? "#7857FC55" : "#7857FC33"}` : "none",
-        "&:hover": { borderColor: active ? "#7857FC" : "text.subtitle" },
+        backgroundImage: active ? selectedTint : "none",
+        transition: "border-color .16s ease",
+        "&:hover": { borderColor: active ? "text.primary" : "text.subtitle" },
       }}
     >
       {/*
@@ -228,9 +252,8 @@ function RouteCard({ route, active, onClick }) {
       <Box
         sx={{
           height: 72, display: "grid", placeItems: "center", overflow: "hidden",
-          bgcolor: active
-            ? (t) => (t.palette.mode === "dark" ? "rgba(120,87,252,0.09)" : "rgba(120,87,252,0.05)")
-            : "background.neutral",
+          bgcolor: "background.neutral",
+          backgroundImage: active ? selectedTint : "none",
           borderBottom: "1px solid", borderColor: "divider",
           "& > svg": { transform: "scale(0.68)", transformOrigin: "center center" },
         }}
