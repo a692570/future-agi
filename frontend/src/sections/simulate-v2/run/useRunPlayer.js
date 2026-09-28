@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildRun } from "../_mock/runStream";
 
+const EMPTY = [];
+
 /**
  * Plays a built run back on a timer.
  *
@@ -15,10 +17,13 @@ import { buildRun } from "../_mock/runStream";
  */
 export default function useRunPlayer({
   seed, scenarios, stage, evals, tools = [], agentTools = null, failRate, concurrency = 4, repeats = 3, phrasing = 0,
+  /* The run's cast and world — without them no actor ever joined a live run,
+     and the live verdicts could differ from the same run read back later. */
+  actors = EMPTY, envVersion = null,
 }) {
   const run = useMemo(
-    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing }),
-    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing],
+    () => buildRun({ seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion }),
+    [seed, scenarios, stage, evals, tools, agentTools, failRate, concurrency, repeats, phrasing, actors, envVersion],
   );
 
   const [phase, setPhase] = useState("booting"); // booting | running | done
@@ -123,6 +128,23 @@ export default function useRunPlayer({
     timers.current.push(setTimeout(() => setPhase("done"), total + 500));
   }, [run.tasks, driveTask]);
 
+  /*
+    Stop, for the demo, means "the run is over": every scenario jumps to the
+    verdict it was always going to reach, and the run finishes normally —
+    recorded, published and handed to the Runs tab like any other.
+  */
+  const finishNow = useCallback(() => {
+    clearTimers();
+    setTasks((ts) => ts.map((t) => ({
+      ...t,
+      status: t.verdict,
+      stepIndex: t.failStep != null ? Math.min(t.failStep, t.steps.length - 1) : t.steps.length - 1,
+      evalIndex: t.evalResults.length,
+    })));
+    setLastEventAt(Date.now());
+    setPhase("done");
+  }, []);
+
   // Elapsed clock.
   useEffect(() => {
     if (phase !== "running") return undefined;
@@ -170,7 +192,7 @@ export default function useRunPlayer({
   }, [tasks, run.repeats]);
 
   return {
-    phase, setPhase, start,
+    phase, setPhase, start, finishNow,
     tasks, focus, focusId, setFocusId,
     stats, elapsed,
     /* Seconds since anything last changed, and whether that is long enough to

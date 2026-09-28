@@ -453,7 +453,7 @@ export default function TraceTable({
                   {variantLabel(t.id)}
                 </Typography>
                 {t.critical && (
-                  <Tooltip arrow title="Critical — a failure here is a release blocker">
+                  <Tooltip arrow title={`Release blocker — ${(t.blockerReason || "a failure here blocks the release.").replace(/^./, (c) => c.toLowerCase())}`}>
                     <Box sx={{ display: "flex" }}>
                       <Iconify icon="solar:danger-triangle-bold" width={12} sx={{ color: "#DC2626" }} />
                     </Box>
@@ -497,7 +497,7 @@ export default function TraceTable({
           <Stack direction="row" alignItems="flex-start" spacing={0.75}>
             <Typography sx={{ typography: "s2", fontWeight: 600 }}>{t.title}</Typography>
             {t.critical && (
-              <Tooltip arrow title="Critical — a failure here is a release blocker">
+              <Tooltip arrow title={`Release blocker — ${(t.blockerReason || "a failure here blocks the release.").replace(/^./, (c) => c.toLowerCase())}`}>
                 <Box sx={{ display: "flex", mt: "2px" }}>
                   <Iconify icon="solar:danger-triangle-bold" width={12} sx={{ color: "text.subtitle" }} />
                 </Box>

@@ -1,4 +1,5 @@
 import { localizeEval } from "./errorLocalization";
+import { endedReasonFor } from "./endedReason";
 
 /**
  * Shape a revamped-flow run task into the `data` object the real
@@ -21,7 +22,9 @@ import { localizeEval } from "./errorLocalization";
 
 /** Map a run turn's role to the transcript speaker roles the drawer expects. */
 const speakerRole = (role) =>
-  role === "agent" ? "assistant" : role === "customer" ? "user" : role || "user";
+  /* The transcript has no third-party speaker; an actor's turn reads as a
+     user turn, and its text names the actor. */
+  role === "agent" ? "assistant" : "user";
 
 /**
  * Synthesize a tool-call turn to sit before an assistant reply.
@@ -256,6 +259,7 @@ export function taskToVoiceData(task, { env, voice = true } = {}) {
     (task?.title ? `Simulated ${voice ? "call" : "conversation"}: ${task.title}` : "");
 
   const recordingUrl = voice ? getMockRecordingUrl() : undefined;
+  const ended = endedReasonFor(task, { voice });
 
   return {
     module: "simulate",
@@ -273,7 +277,10 @@ export function taskToVoiceData(task, { env, voice = true } = {}) {
     turn_count: steps.length,
     phone_number: voice ? "+1 (415) 555-0182" : undefined,
     timestamp: task?.finishedAt || task?.startedAt || task?.timestamp || undefined,
-    ended_reason: "assistant-ended-call",
+    /* The plain reason, not the pipeline's internal one — a normal run read
+       "simulator ended the call" and sounded like a fault. The raw value is
+       kept in the Attributes tab for debugging. */
+    ended_reason: ended.label,
 
     transcript,
     eval_metrics,
@@ -304,6 +311,7 @@ export function taskToVoiceData(task, { env, voice = true } = {}) {
       traits: (task?.persona?.traits || []).join(", ") || undefined,
       expected: task?.expected,
       critical: String(!!task?.critical),
+      ended_reason_raw: ended.raw,
     },
 
     scenario: summary,

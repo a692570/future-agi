@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, IconButton, Button, TextField, Slider, Tooltip,
-  MenuItem, Select, InputLabel, FormControl, ToggleButton, ToggleButtonGroup,
+  MenuItem, Select, InputLabel, FormControl, ToggleButton, ToggleButtonGroup, Switch,
 } from "@mui/material";
 import { useSnackbar } from "notistack";
 import Iconify from "src/components/iconify";
 import SideDrawer from "../../components/SideDrawer";
 import { emitBuilderPrompt } from "../../_mock/builderPromptBus";
+import { blockerReason, setBlocker, onlyBlockerChanged, unmarkedNote } from "../../_mock/releaseBlocker";
 
 /**
  * Edit one scenario.
@@ -80,6 +81,9 @@ const deriveNoise = (persona) => {
 
 export default function ScenarioEditor({ open, onClose, row, env, envState, onSave, onBuilderPrompt }) {
   const [draft, setDraft] = useState(row || {});
+  /* The draft as it opened, derived defaults included — what "changed" is
+     measured against. */
+  const [initial, setInitial] = useState(row || {});
   const { enqueueSnackbar } = useSnackbar();
 
   useEffect(() => {
@@ -90,11 +94,13 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
       empty controls. If the mock ever starts storing them explicitly,
       those win.
     */
-    setDraft({
+    const opened = {
       ...row,
       caller: row.caller || deriveCaller(row.persona),
       backgroundNoise: row.backgroundNoise || deriveNoise(row.persona),
-    });
+    };
+    setDraft(opened);
+    setInitial(opened);
   }, [row]);
 
   if (!row) return null;
@@ -105,7 +111,14 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
 
   const isConversational = CONVERSATIONAL_SURFACES.includes(env?.surface);
   const isVoice = VOICE_ONLY_SURFACES.includes(env?.surface);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(row);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  /* Flipping only the blocker flag leaves the proof standing — save the row
+     as it was plus the flag, rather than the derived defaults as an edit. */
+  const blockerOnly = onlyBlockerChanged(initial, draft);
+  const save = () => {
+    onSave(blockerOnly ? setBlocker(row, !!draft.critical) : draft, { blockerOnly });
+    onClose();
+  };
 
   return (
     <SideDrawer open={open} onClose={onClose} width={620}>
@@ -156,6 +169,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
             helperText="What a pass looks like. Evals grade against this."
             InputProps={{ sx: { typography: "s2" } }}
           />
+          <BlockerSwitch row={draft} onChange={(on) => setDraft((d) => setBlocker(d, on))} />
 
           {/* ─── Persona ─── */}
           {/*
@@ -415,7 +429,7 @@ export default function ScenarioEditor({ open, onClose, row, env, envState, onSa
           </Button>
           <Button
             variant="contained" color="primary" size="small" disabled={!dirty}
-            onClick={() => { onSave(draft); onClose(); }}
+            onClick={save}
             sx={{ typography: "s2", fontWeight: 700 }}
           >
             Save scenario
@@ -433,7 +447,42 @@ ScenarioEditor.propTypes = {
   env: PropTypes.object,
   envState: PropTypes.object,
   onSave: PropTypes.func,
+  onBuilderPrompt: PropTypes.func,
 };
+
+/* Whether a failure here stops the release. Sits with the directly-editable
+   fields: it changes how a failure is counted, not what the scenario tests. */
+function BlockerSwitch({ row, onChange }) {
+  const on = !!row.critical;
+  const why = on ? blockerReason(row) : unmarkedNote(row);
+  return (
+    <Stack
+      direction="row" alignItems="flex-start" spacing={1.25}
+      sx={{ p: 1.5, borderRadius: 1.25, border: "1px solid", borderColor: "divider" }}
+    >
+      <Iconify
+        icon={on ? "solar:danger-triangle-bold" : "solar:danger-triangle-linear"}
+        width={16}
+        sx={{ color: on ? "#DC2626" : "text.disabled", mt: "2px", flexShrink: 0 }}
+      />
+      <Box flex={1} minWidth={0}>
+        <Typography sx={{ typography: "s2", fontWeight: 600 }}>Release blocker</Typography>
+        <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+          {on
+            ? "Any failure here blocks the release, however high the pass rate."
+            : "A failure here counts against the pass rate but doesn't block the release."}
+        </Typography>
+        {why && <Typography sx={{ typography: "s3", color: "text.secondary", mt: 0.5 }}>{why}</Typography>}
+      </Box>
+      <Switch
+        size="small" checked={on} onChange={(e) => onChange(e.target.checked)}
+        inputProps={{ "aria-label": "Release blocker" }}
+        sx={{ flexShrink: 0, mt: "-2px" }}
+      />
+    </Stack>
+  );
+}
+BlockerSwitch.propTypes = { row: PropTypes.object.isRequired, onChange: PropTypes.func.isRequired };
 
 function SectionHeader({ title, hint }) {
   return (

@@ -3,13 +3,14 @@ import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState
 import { alpha } from "@mui/material/styles";
 import {
   Box, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
-  IconButton, Tooltip, Checkbox,
+  IconButton, Tooltip, Checkbox, CircularProgress,
 } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { subTasksFor } from "../../_mock/contract";
 import { admissionOf } from "../../_mock/coverage";
 import { versionNumber } from "../../_mock/versions";
 import { ScenarioRowContext } from "./scenarioRowContext";
+import BlockerFlag from "./BlockerFlag";
 
 /* Neutral white-on-selected checkbox — no primary colour, keeps the
    table's monochrome treatment. */
@@ -50,6 +51,7 @@ function StatusChip({ status }) {
         }}
       >
         {status.id === "proved" && <Iconify icon="solar:check-circle-linear" width={12} sx={{ color: "text.disabled" }} />}
+        {status.id === "checking" && <CircularProgress size={10} thickness={6} sx={{ color: "text.disabled" }} />}
         <Typography noWrap sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{status.label}</Typography>
       </Box>
     </Tooltip>
@@ -109,7 +111,7 @@ ToolChips.propTypes = {
 };
 
 export default function ScenarioTable({
-  rows, groups, env, envVersion, onEdit, onRemove, selectedIds, onSelectionChange, locked = false,
+  rows, groups, env, envVersion, onEdit, onRemove, onToggleBlocker, selectedIds, onSelectionChange, locked = false,
 }) {
   const { statusOf, toolsOf, answers, agentCalls, agentLabel } = useContext(ScenarioRowContext);
   /*
@@ -426,13 +428,7 @@ export default function ScenarioTable({
                         </Box>
                       </Tooltip>
                     )}
-                    {row.critical && (
-                      <Tooltip arrow title="Critical — a failure here is a release blocker">
-                        <Box sx={{ display: "flex" }}>
-                          <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: "#DC2626" }} />
-                        </Box>
-                      </Tooltip>
-                    )}
+                    <BlockerFlag row={row} onToggle={onToggleBlocker} locked={locked} />
                     {/* PRD §9 AC-9.13 — admission status. Amber icon only,
                         matching the existing red-triangle "critical" idiom
                         so the row doesn't grow a text chip on every case.
@@ -567,6 +563,7 @@ ScenarioTable.propTypes = {
   envVersion: PropTypes.string,
   onEdit: PropTypes.func,
   onRemove: PropTypes.func,
+  onToggleBlocker: PropTypes.func,
   onHideGroup: PropTypes.func,
   selectedIds: PropTypes.array,
   onSelectionChange: PropTypes.func,

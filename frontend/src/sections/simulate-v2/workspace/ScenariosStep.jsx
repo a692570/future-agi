@@ -42,6 +42,7 @@ import { FilterPanel } from "src/components/filter-panel";
 import { currentAgentVersion, currentEnvVersion, environmentVersions } from "../_mock/versions";
 import { agentToolsFor, knownToolsFor, requiredToolsOf, worldToolsFor } from "../_mock/toolFit";
 import { needsAttention, scenarioStatus } from "../_mock/scenarioStatus";
+import { setBlocker } from "../_mock/releaseBlocker";
 import SideDrawer from "../components/SideDrawer";
 import { ScenarioRowContext } from "./scenarios/scenarioRowContext";
 
@@ -392,8 +393,36 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
      And an edited scenario is an unproved one: the proof was of the task as it
      read before. Stamping the edit is what makes it show up in the banner
      above rather than keeping a green tick it no longer earns. */
-  const saveScenario = (row) =>
-    patch({ scenarios: selected.map((s) => (s.id === row.id ? markEdited(row) : s)) });
+  const saveScenario = (row, { blockerOnly } = {}) =>
+    patch({ scenarios: selected.map((s) => (s.id === row.id ? (blockerOnly ? row : markEdited(row)) : s)) });
+
+  /* Whether a failure blocks the release is the team's call. Flipping it
+     doesn't touch the task, so the proof stands and the row isn't "edited". */
+  const toggleBlocker = (id) => {
+    const before = selected.find((s) => s.id === id);
+    if (!before) return;
+    const after = setBlocker(before, !before.critical);
+    patch({ scenarios: selected.map((s) => (s.id === id ? after : s)) });
+    const name = before.name || before.title || "Scenario";
+    const key = enqueueSnackbar(
+      after.critical ? `"${name}" is now a release blocker` : `"${name}" is no longer a release blocker`,
+      {
+        variant: "info",
+        autoHideDuration: 5000,
+        action: (snackId) => (
+          <Button
+            size="small" sx={{ color: "common.white", fontWeight: 700, typography: "s2" }}
+            onClick={() => {
+              patch({ scenarios: selected.map((s) => (s.id === id ? before : s)) });
+              closeSnackbar(snackId || key);
+            }}
+          >
+            Undo
+          </Button>
+        ),
+      },
+    );
+  };
 
   /* The chosen depth overrides the environment's own, and every generation
      route is handed the adjusted environment rather than the original. */
@@ -825,6 +854,7 @@ export default function ScenariosStep({ env, envState, patch, buildMode, onBuild
                   envVersion: currentEnvVersion(env, envState).label,
                   onEdit: setEditing,
                   onRemove: removeScenario,
+                  onToggleBlocker: toggleBlocker,
                   onHideGroup: toggleGroupHidden,
                   selectedIds,
                   onSelectionChange: handleSelectionChange,

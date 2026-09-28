@@ -11,6 +11,8 @@
  */
 import { admissionOf } from "./coverage";
 import { inferTools } from "./toolInference";
+import { blockerReason } from "./releaseBlocker";
+import { scriptFor } from "./runScripts";
 
 /* ── seeded RNG (mulberry32) ─────────────────────────────────────────────── */
 export function rng(seed) {
@@ -348,19 +350,30 @@ export function buildRun({
   const answers = new Set(tools.map((t) => t.name));
   const gapTools = (agentTools || []).filter((t) => !answers.has(t.name));
   const r = rng(hashSeed(seed));
-  const vocabFor = (sc) => (stage === "browser"
-    ? BROWSER_VOCAB[browserAppOf(sc)]
-    : STAGE_STEPS[stage] || VOICE_TURNS);
+  /* The scenario's own conversation where one can be written — same length
+     as the stock script it replaces, so the run draws the same numbers. */
+  const vocabFor = (sc) => {
+    if (stage === "browser") return { vocab: BROWSER_VOCAB[browserAppOf(sc)], scripted: false };
+    const stock = STAGE_STEPS[stage] || VOICE_TURNS;
+    const own = scriptFor(sc, stage);
+    return own && own.length === stock.length ? { vocab: own, scripted: true } : { vocab: stock, scripted: false };
+  };
 
   const tasks = scenarios.map((sc, i) => {
-    const vocab = vocabFor(sc);
+    const { vocab, scripted } = vocabFor(sc);
     const stepCount = 5 + Math.floor(r() * Math.min(vocab.length - 4, 8));
+    /* Dwell times are drawn for the stock length exactly as before, so every
+       seeded run keeps its verdicts. A scenario's own script is played in
+       full — cutting a rule probe off before the agent answers leaves nothing
+       to watch — and its extra turns take their timing from a hash. */
+    const drawn = Array.from({ length: stepCount }, () => 600 + Math.floor(r() * 1400));
+    const length = scripted ? vocab.length : stepCount;
     /* Phrasing belongs to the agent version, not to the run: one prompt means
        one way of opening the call, every time it runs. Two runs of the same
        version therefore read identically — which is what makes a wording
        difference between columns attributable to the version change. */
     const voiceIdx = phrasing;
-    const steps = Array.from({ length: stepCount }, (_, s) => {
+    const steps = Array.from({ length }, (_, s) => {
       const base = vocab[s % vocab.length];
       const phrasings = base.alts ? [base.text, ...base.alts] : null;
       return {
@@ -369,7 +382,7 @@ export function buildRun({
         ...base,
         ...(phrasings ? { text: phrasings[voiceIdx % phrasings.length] } : {}),
         // Per-step dwell time, in ms of simulated wall clock.
-        duration: 600 + Math.floor(r() * 1400),
+        duration: drawn[s] ?? 600 + (hashSeed(`${sc.id}:d${s}`) % 1400),
       };
     });
 
@@ -390,13 +403,26 @@ export function buildRun({
     const actorHash = hashSeed(`${sc.id}:actor`);
     const actor = ownCast[0] || (actors.length && actorHash % 4 === 0 ? actors[actorHash % actors.length] : null);
     if (actor) {
-      const at = Math.min(steps.length - 1, 2 + (actorHash % Math.max(1, steps.length - 3)));
+      /* When they come in is who they are: someone present speaks from the
+         start, someone who joins arrives once the agent hands over, and an
+         interruption lands wherever it lands. */
+      const handover = steps.findIndex((st) => st.meets?.includes("close"));
+      const at = actor.entry === "present"
+        ? 1
+        : actor.entry === "joins"
+          ? (handover >= 0 ? handover + 1 : steps.length - 2)
+          : Math.min(steps.length - 1, 2 + (actorHash % Math.max(1, steps.length - 3)));
+      const where = stage === "voice" ? "call" : "conversation";
+      const lead = { present: `Also on the ${where}`, joins: `Joins the ${where}` }[actor.entry] || "Cuts in";
       steps.splice(at, 0, {
         id: `${sc.id}-actor`,
         index: at,
-        role: "customer",
+        /* A third party, not the caller — the stage and the transcript
+           label it as the actor it is. */
+        role: "actor",
         actorId: actor.id,
-        text: `${actor.name} cuts in — ${actor.goal}`,
+        actorName: actor.name,
+        text: `${lead} — ${actor.goal.charAt(0).toLowerCase()}${actor.goal.slice(1)}`,
         duration: 900,
       });
       steps.forEach((st, k) => { st.index = k; });
@@ -439,9 +465,17 @@ export function buildRun({
     const failChance = (sc.critical ? failRate * 1.9 : failRate) + (actor ? 0.06 : 0);
     const draw = r();
     const failed = draw < failChance;
-    const failStep = failed
+    const drawnFail = failed
       ? Math.max(2, Math.floor(steps.length * (0.45 + r() * 0.45)))
       : null;
+    /* A scripted scenario fails where it turns — the agent gives in, skips the
+       check, or claims it done — and says so, rather than going quiet at a
+       random turn. */
+    const cruxAt = steps.findIndex((st) => st.crux);
+    const failStep = failed && !unmeasured && cruxAt >= 0 ? cruxAt : drawnFail;
+    if (failStep === cruxAt && cruxAt >= 0 && steps[cruxAt].failText) {
+      steps[cruxAt] = { ...steps[cruxAt], text: steps[cruxAt].failText, failedHere: true };
+    }
 
     /*
       The graders decide. How well the agent did is drawn above; what the
@@ -517,6 +551,8 @@ export function buildRun({
     return {
       id: sc.id,
       callLog,
+      /* The row label every other screen leads with. */
+      name: sc.name,
       title: sc.title,
       task: sc.task,
       /* One-line human summary of what this scenario puts the agent through
@@ -525,7 +561,11 @@ export function buildRun({
       summary: sc.summary,
       persona: sc.persona,
       expected: sc.expected,
+      /* What the runner watches for — the same sub-goals the scenario table lists. */
+      subTasks: sc.subTasks,
       critical: sc.critical,
+      /* Why it blocks, as it stood when the run started. */
+      blockerReason: blockerReason(sc),
       /* Carry the scenario's use-case sentence through so downstream
          grouping in the traces table matches the labels the env
          creation Scenarios tab shows. Without this a task falls back

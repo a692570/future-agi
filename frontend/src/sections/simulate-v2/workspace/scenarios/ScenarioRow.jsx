@@ -1,7 +1,8 @@
 import PropTypes from "prop-types";
-import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, IconButton, Stack, Typography } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { PersonaBadge } from "../../components/primitives";
+import BlockerFlag from "./BlockerFlag";
 
 /*
   One compact scenario row, used by the add-scenario pickers. Lives in its
@@ -37,13 +38,7 @@ export default function ScenarioRow({ row, index, onRemove, selectable, checked,
       <Box sx={{ flex: 1.4, minWidth: 0 }}>
         <Stack direction="row" alignItems="center" spacing={0.75}>
           <Typography noWrap sx={{ typography: "s2", fontWeight: 600 }}>{row.title}</Typography>
-          {row.critical && (
-            <Tooltip title="Critical — a failure here is a release blocker" arrow>
-              <Box sx={{ display: "flex" }}>
-                <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: "#DC2626" }} />
-              </Box>
-            </Tooltip>
-          )}
+          <BlockerFlag row={row} />
         </Stack>
         <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{row.task}</Typography>
       </Box>

@@ -9,12 +9,13 @@
 import PropTypes from "prop-types";
 import { useEffect, useRef } from "react";
 import { alpha } from "@mui/material/styles";
-import { Box, Stack, Typography, keyframes } from "@mui/material";
+import { Box, Stack, Tooltip, Typography, keyframes } from "@mui/material";
 import Iconify from "src/components/iconify";
 import { browserAppOf } from "../../_mock/runStream";
 import BrowserApp, { deriveState, focusOf, CURSOR, urlFor } from "./BrowserApps";
 import { PersonaBadge } from "../../components/primitives";
 import CloneStage from "./CloneStage";
+import { endedReasonFor } from "../../_mock/endedReason";
 
 const bar = keyframes`
   0%, 100% { transform: scaleY(0.28); }
@@ -57,11 +58,13 @@ function useAutoScroll(dep) {
 
 /* ── voice ───────────────────────────────────────────────────────────────── */
 
-export function VoiceStage({ task, stepIndex, live }) {
-  const scrollRef = useAutoScroll(stepIndex);
+export function VoiceStage({ task, stepIndex, live, agentVersion }) {
+  const scrollRef = useAutoScroll(`${stepIndex}:${task.status}`);
   const visible = task.steps.slice(0, stepIndex + 1);
   const current = task.steps[stepIndex];
   const agentSpeaking = current?.role === "agent";
+  /* The dots belong to whoever speaks next, not to whoever just spoke. */
+  const next = task.steps[stepIndex + 1];
 
   return (
     <StageShell>
@@ -74,7 +77,7 @@ export function VoiceStage({ task, stepIndex, live }) {
       >
         <Party
           label={task.persona?.name || "Caller"}
-          sub={task.persona?.voice}
+          sub={task.persona?.voice ? `Caller · ${task.persona.voice}` : "Caller"}
           icon="solar:user-linear"
           color={null}
           speaking={live && current?.role === "customer"}
@@ -84,7 +87,7 @@ export function VoiceStage({ task, stepIndex, live }) {
         </Box>
         <Party
           label="Your agent"
-          sub="under test"
+          sub={agentVersion ? `${agentVersion} · under test` : "under test"}
           icon="solar:cpu-bolt-linear"
           color={null}
           accent
@@ -99,13 +102,16 @@ export function VoiceStage({ task, stepIndex, live }) {
           {visible.map((s, i) => (
             <Turn key={s.id} turn={s} latest={live && i === visible.length - 1} />
           ))}
-          {live && <TypingIndicator role={agentSpeaking ? "agent" : "customer"} />}
+          {live && next && <TypingIndicator role={next.role} />}
+          <CallEnded task={task} live={live} voice />
         </Stack>
       </Box>
     </StageShell>
   );
 }
-VoiceStage.propTypes = { task: PropTypes.object, stepIndex: PropTypes.number, live: PropTypes.bool };
+VoiceStage.propTypes = {
+  task: PropTypes.object, stepIndex: PropTypes.number, live: PropTypes.bool, agentVersion: PropTypes.string,
+};
 
 /*
   Only the agent gets an accent, and it is the theme's own primary — monochrome
@@ -177,8 +183,13 @@ function Waveform({ active, agent }) {
 }
 Waveform.propTypes = { active: PropTypes.bool, agent: PropTypes.bool };
 
+/* Who said it. An actor is a third party with its own goal — never the
+   caller — so it is named, and its turn is drawn apart from the caller's. */
 function Turn({ turn, latest }) {
   const isAgent = turn.role === "agent";
+  const isActor = turn.role === "actor";
+  /* The line the scenario failed on — where the agent gave in. */
+  const failed = !!turn.failedHere;
   return (
     <Stack
       direction="row"
@@ -188,23 +199,64 @@ function Turn({ turn, latest }) {
       <Box
         sx={{
           maxWidth: "76%", px: 1.75, py: 1.125, borderRadius: 1.5,
-          border: "1px solid",
-          borderColor: (t) => isAgent ? alpha(t.palette.primary.main, 0.3) : t.palette.divider,
+          border: isActor ? "1px dashed" : "1px solid",
+          borderColor: (t) => failed ? alpha("#DC2626", 0.6)
+            : isAgent ? alpha(t.palette.primary.main, 0.3) : isActor ? t.palette.text.disabled : t.palette.divider,
           bgcolor: (t) => isAgent
             ? alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.06)
             : "background.paper",
           ...(latest && { boxShadow: (t) => `0 0 0 3px ${alpha(isAgent ? t.palette.primary.main : t.palette.text.disabled, 0.1)}` }),
         }}
       >
-        <Typography sx={{ typography: "s3", fontWeight: 700, color: isAgent ? "primary.main" : "text.subtitle", mb: 0.25 }}>
-          {isAgent ? "Agent" : "Customer"}
-        </Typography>
-        <Typography sx={{ typography: "s2" }}>{turn.text}</Typography>
+        {isActor ? (
+          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.25 }}>
+            <Iconify icon="solar:users-group-rounded-linear" width={12} sx={{ color: "text.subtitle" }} />
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle" }}>
+              {turn.actorName || "Actor"} · actor
+            </Typography>
+          </Stack>
+        ) : (
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.25 }}>
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: isAgent ? "primary.main" : "text.subtitle" }}>
+              {isAgent ? "Agent" : "Caller"}
+            </Typography>
+            {failed && (
+              <Stack direction="row" alignItems="center" spacing={0.375} sx={{ color: "#DC2626" }}>
+                <Iconify icon="solar:close-circle-bold" width={11} />
+                <Typography sx={{ typography: "s3", fontWeight: 700, color: "inherit" }}>Failed here</Typography>
+              </Stack>
+            )}
+          </Stack>
+        )}
+        <Typography sx={{ typography: "s2", ...(isActor && { fontStyle: "italic", color: "text.secondary" }) }}>{turn.text}</Typography>
       </Box>
     </Stack>
   );
 }
 Turn.propTypes = { turn: PropTypes.object, latest: PropTypes.bool };
+
+/* How the call ended, in words a customer would use. The pipeline's own
+   value ("simulator-ended-call") is what made a normal run sound broken, so
+   it stays in the tooltip for whoever is debugging. */
+const SETTLED = ["grading", "passed", "failed", "flaky", "unmeasured"];
+function CallEnded({ task, live, voice }) {
+  if (live || !SETTLED.includes(task.status)) return null;
+  const { raw, label, tone } = endedReasonFor(task, { voice });
+  const color = { warn: "#CA8A04", error: "#DC2626" }[tone] || "text.subtitle";
+  return (
+    <Stack direction="row" alignItems="center" spacing={1.25} sx={{ pt: 0.5 }}>
+      <Box sx={{ flex: 1, borderTop: "1px solid", borderColor: "divider" }} />
+      <Tooltip arrow title={`Reported by the pipeline as “${raw}”`}>
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ color }}>
+          <Iconify icon={voice ? "solar:end-call-linear" : "solar:chat-round-check-linear"} width={13} />
+          <Typography sx={{ typography: "s3", fontWeight: 600, color: "inherit" }}>{label}</Typography>
+        </Stack>
+      </Tooltip>
+      <Box sx={{ flex: 1, borderTop: "1px solid", borderColor: "divider" }} />
+    </Stack>
+  );
+}
+CallEnded.propTypes = { task: PropTypes.object, live: PropTypes.bool, voice: PropTypes.bool };
 
 function TypingIndicator({ role }) {
   const isAgent = role === "agent";
@@ -237,9 +289,9 @@ TypingIndicator.propTypes = { role: PropTypes.string };
 /* ── chat ────────────────────────────────────────────────────────────────── */
 
 export function ChatStage({ task, stepIndex, live }) {
-  const scrollRef = useAutoScroll(stepIndex);
+  const scrollRef = useAutoScroll(`${stepIndex}:${task.status}`);
   const visible = task.steps.slice(0, stepIndex + 1);
-  const current = task.steps[stepIndex];
+  const next = task.steps[stepIndex + 1];
 
   return (
     <StageShell>
@@ -262,7 +314,8 @@ export function ChatStage({ task, stepIndex, live }) {
           {visible.map((s, i) => (
             <Turn key={s.id} turn={s} latest={live && i === visible.length - 1} />
           ))}
-          {live && <TypingIndicator role={current?.role === "agent" ? "agent" : "customer"} />}
+          {live && next && <TypingIndicator role={next.role} />}
+          <CallEnded task={task} live={live} voice={false} />
         </Stack>
       </Box>
     </StageShell>
@@ -738,16 +791,16 @@ const STAGES = {
   CloneStage is chosen over the modality-based STAGES when the caller
   passes twinBacking.
 */
-export default function Stage({ stage, task, stepIndex, live, twinBacking }) {
+export default function Stage({ stage, task, stepIndex, live, twinBacking, agentVersion }) {
   if (!task) return null;
   if (twinBacking?.services?.length) {
     return <CloneStage task={task} stepIndex={stepIndex} live={live} twinBacking={twinBacking} />;
   }
   const Cmp = STAGES[stage] || VoiceStage;
-  return <Cmp task={task} stepIndex={stepIndex} live={live} />;
+  return <Cmp task={task} stepIndex={stepIndex} live={live} agentVersion={agentVersion} />;
 }
 Stage.propTypes = {
   stage: PropTypes.string, task: PropTypes.object,
   stepIndex: PropTypes.number, live: PropTypes.bool,
-  twinBacking: PropTypes.object,
+  twinBacking: PropTypes.object, agentVersion: PropTypes.string,
 };

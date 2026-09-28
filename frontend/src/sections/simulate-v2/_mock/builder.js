@@ -363,25 +363,33 @@ const STAGES = {
     /* A count set on the connect form is honoured exactly; with none the
        builder drafts across the whole use-case range. */
     const n = source?.scenarioCount || source?.draftCount || 8;
+    /* Each scenario is checked as it's written, not all at the end — so the
+       narration reports checks as they land, and the scenario the third gate
+       sends back (the third one written, when there are enough) is rewritten
+       and re-checked before the next is kept. The Scenarios table shows the
+       same thing row by row: Checking…, then Proved. */
+    const third = Math.min(3, n);
+    const early = Math.max(1, Math.min(2, n - 1));
+    const mid = Math.max(third, Math.round(n * 0.6));
     return ({
     title: "Proving scenarios",
     steps: [
       think(source?.scenarioCount
-        ? `Drafting exactly ${n} — the number you asked for — spread across rules, traps, adversarial callers and edge cases.`
-        : "One scenario per real use case, each with its own persona brief and sub-goals."),
-      tool("draft_scenarios", `${n} drafted across the use-case range`),
-      think("Three gates, all code, no model: ready, solvable, not vacuous."),
-      tool("gate · ready", `${n} / ${n} the world holds what the scenario presumes`),
-      tool("gate · solvable", `${n} / ${n} the reference solution passes the scenario's own checks`),
-      tool("gate · not vacuous", `${n - 1} / ${n} running nothing must fail the checks`),
+        ? `Writing exactly ${n} — the number you asked for — spread across rules, traps, adversarial callers and edge cases.`
+        : `Writing ${n}, one per real use case, each with its own persona brief and sub-goals.`),
+      think("Each one is checked as soon as it's written — three gates, all code, no model: ready, solvable, not vacuous — and kept only once it passes."),
+      tool("write + check", `${early} of ${n} kept · each passed ready, solvable and not vacuous`),
+      tool("gate · not vacuous", `scenario ${third} failed — running nothing still passed its checks`),
       note(
-        "One scenario failed the third gate and was rewritten, not kept: its identity check asserted " +
+        `Scenario ${third} was sent back, not kept: its identity check asserted ` +
         "\"no modification happened before authentication\", which is trivially true when nothing happened. " +
         "A check that passes while the agent did nothing grades nothing while reporting a result.",
       ),
-      tool("gate · not vacuous", `${n} / ${n} after the rewrite`),
+      tool("rewrite + re-check", `scenario ${third} rewritten · all three gates pass · kept`),
+      tool("write + check", `${mid} of ${n} kept`),
+      tool("write + check", `${n} of ${n} kept · 1 rewritten`),
       file("scenarios/", "one folder each: scenario.json, setup.py, ready.py, checks/"),
-      note(`${n} of ${n} kept. Only proved scenarios are ever run.`),
+      note(`${n} of ${n} kept, each proved as it was written. Only proved scenarios are ever run.`),
     ],
     chips: ["use this environment →", "write 4 more edge cases"],
   });

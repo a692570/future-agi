@@ -135,17 +135,44 @@ export default function BuildFromAgent() {
     [env, buildDone, difficulty, source?.scenarioCount, builtAt, buildId],
   );
   /* Scenarios land one at a time while the stage writes them, so the
-     Scenarios tab fills as they are proved rather than all at once at the
-     end. `revealed` counts how many have been written so far. */
+     Scenarios tab fills as they are written rather than all at once at the
+     end. `revealed` counts how many have been written so far, `checked` how
+     many of those have passed their checks — each is checked as it's
+     written, so a new row reads "Checking…" until it's proved. */
   const [revealed, setRevealed] = useState(0);
-  const scenarios = useMemo(
-    () => (scenariosDone ? pool : pool.slice(0, revealed)),
-    [pool, revealed, scenariosDone],
-  );
+  const [checked, setChecked] = useState(0);
+  /* The scenario the third gate sends back once — the third written, as the
+     builder's own narration says — rewritten and re-checked before it's kept. */
+  const rewrittenIdx = pool.length ? Math.min(3, pool.length) - 1 : null;
+  const scenarios = useMemo(() => {
+    const mark = (r, i) => (i === rewrittenIdx ? { ...r, rewritten: true } : r);
+    if (scenariosDone) return pool.map(mark);
+    return pool.slice(0, revealed).map((r, i) => (i >= checked ? { ...mark(r, i), checking: true } : mark(r, i)));
+  }, [pool, revealed, checked, scenariosDone, rewrittenIdx]);
+  const provedCount = scenarios.filter((r) => !r.checking).length;
+  const scenarioSyncKey = `${scenarios.length}:${provedCount}`;
   const scenarioProgress = {
     shown: scenarios.length,
     total: pool.length,
+    proved: provedCount,
+    rewritten: rewrittenIdx != null && provedCount > rewrittenIdx ? 1 : 0,
     streaming: buildDone && !scenariosDone,
+  };
+
+  /* The contract as it's written: how many tools, rules and stores the
+     builder has found so far. The Overview's build table fills in from this
+     while the agent is read and the world is seeded. */
+  const [contractFound, setContractFound] = useState({ tools: 0, rules: 0, stores: 0 });
+  const contractProgress = {
+    ...contractFound,
+    streaming: !buildDone && contractFound.tools > 0,
+  };
+  /* Spread `count` reveals of one kind across a stretch of a stage's steps. */
+  const streamFound = (kind, count, fromMs, toMs) => {
+    for (let k = 1; k <= count; k += 1) {
+      const at = fromMs + ((toMs - fromMs) * k) / count;
+      timers.current.push(setTimeout(() => setContractFound((c) => ({ ...c, [kind]: Math.max(c[kind], k) })), at));
+    }
   };
 
   useEffect(() => {
@@ -267,7 +294,14 @@ export default function BuildFromAgent() {
   const startDerivationAfterAck = () => {
     setAwaitReadAck(false);
     const stage = builderRun("understand", source);
-    play(stage.title, stage.steps, stage.chips, "understand");
+    /* Reading the agent is where the contract gets written, so it runs at a
+       pace the table can visibly fill at: tools while their signatures are
+       read (steps 3–5), rules while they're separated out (steps 6–8). */
+    const pace = 600;
+    setContractFound({ tools: 0, rules: 0, stores: 0 });
+    streamFound("tools", env?.tools?.length || 0, pace * 3, pace * 5);
+    streamFound("rules", env?.rules?.length || 0, pace * 6, pace * 8);
+    play(stage.title, stage.steps, stage.chips, "understand", pace);
   };
 
   /* Preset-source bootstrap — when a picker in StartEnvironment hands us
@@ -322,14 +356,29 @@ export default function BuildFromAgent() {
     const stage = builderRun(id, { ...source, draftCount });
     /* Writing scenarios is the stage people wait on, so it runs slower and
        drops each scenario into the table as it is written — spread across
-       the stage, finishing on its last step. */
-    const pace = id === "scenarios" ? 650 : 380;
+       the stage, finishing on its last step. Each is then checked: its row
+       reads "Checking…" for a beat before it's proved. Checks run in order,
+       so the one the third gate sends back holds the queue while it's
+       rewritten and re-checked. */
+    const pace = id === "scenarios" ? 650 : id === "build" ? 550 : 380;
+    if (id === "build") {
+      /* Seeding the world (steps 3–5) is where the stores land. */
+      streamFound("stores", env?.seed?.tables?.length || 0, pace * 3, pace * 5);
+    }
     if (id === "scenarios" && draftCount) {
       setRevealed(0);
+      setChecked(0);
       const from = pace;
-      const span = pace * (stage.steps.length - 1) - from;
+      const span = pace * (stage.steps.length - 2) - from;
+      const gap = span / draftCount;
+      const redo = Math.min(3, draftCount); /* 1-based: the one sent back */
+      let lastCheck = 0;
       for (let k = 1; k <= draftCount; k += 1) {
-        timers.current.push(setTimeout(() => setRevealed(k), from + (span * k) / draftCount));
+        const writtenAt = from + gap * k;
+        timers.current.push(setTimeout(() => setRevealed(k), writtenAt));
+        const checkFor = gap * (k === redo ? 2.2 : 0.7);
+        lastCheck = Math.max(writtenAt, lastCheck) + checkFor;
+        timers.current.push(setTimeout(() => setChecked(k), lastCheck));
       }
     }
     play(stage.title, stage.steps, stage.chips, id, pace);
@@ -596,10 +645,11 @@ export default function BuildFromAgent() {
        read from it while the user reviews. */
     const nextPatch = {};
     /* Sync what the stage has written so far — keyed on what was last
-       written, not on the store, so a scenario the user adds or removes
-       afterwards is not overwritten by the generated list. */
-    if (scenarios?.length && syncedScenariosRef.current !== scenarios.length) {
-      syncedScenariosRef.current = scenarios.length;
+       written and how many have passed their checks, not on the store, so a
+       scenario the user adds or removes afterwards is not overwritten by the
+       generated list, while a row turning from Checking… to Proved still is. */
+    if (scenarios?.length && syncedScenariosRef.current !== scenarioSyncKey) {
+      syncedScenariosRef.current = scenarioSyncKey;
       nextPatch.scenarios = scenarios;
     }
     if (evalIds?.length && (envState.evals?.length || 0) !== evalIds.length) {
@@ -612,7 +662,7 @@ export default function BuildFromAgent() {
     if (Object.keys(nextPatch).length) {
       dispatch({ type: "patchEnvState", envId: env.id, patch: nextPatch });
     }
-  }, [env?.id, done, scenarios?.length, evalIds?.length, envState.scenarios?.length, envState.evals?.length, envState.agent, source, name, difficulty, dispatch]);
+  }, [env?.id, done, scenarios?.length, scenarioSyncKey, evalIds?.length, envState.scenarios?.length, envState.evals?.length, envState.agent, source, name, difficulty, dispatch]);
 
   /* Back out of the source picker leaves the route; back out of a derivation
      returns to the picker, so a wrong URL is one click to fix, not a reload.
@@ -715,6 +765,7 @@ export default function BuildFromAgent() {
             env={env} envState={envState} patch={envPatch}
             scenarios={scenarios}
             scenarioProgress={scenarioProgress}
+            contractProgress={contractProgress}
             evalIds={evalIds} onAddEvals={() => setAddingEvals(true)}
             onBuilderTurn={runBuilderTurn}
             onRun={runNow}
@@ -2179,7 +2230,7 @@ const difficultyForDepth = (d) => (d === "focused" ? "Basic" : d === "comprehens
 
 function Deriving({
   turns, running, chips, onSend, onChip, done, source, env, envState, patch, scenarios,
-  scenarioProgress, evalIds, onAddEvals, onBuilderTurn, onRun,
+  scenarioProgress, contractProgress, evalIds, onAddEvals, onBuilderTurn, onRun,
 }) {
   return (
     <Box
@@ -2228,6 +2279,7 @@ function Deriving({
           running={running}
           scenarios={scenarios}
           scenarioProgress={scenarioProgress}
+          contractProgress={contractProgress}
           evalIds={evalIds}
           onAddEvals={onAddEvals}
           onBuilderTurn={onBuilderTurn}
@@ -2297,6 +2349,7 @@ Deriving.propTypes = {
   envState: PropTypes.object, patch: PropTypes.func,
   scenarios: PropTypes.array,
   scenarioProgress: PropTypes.object,
+  contractProgress: PropTypes.object,
   evalIds: PropTypes.array, onAddEvals: PropTypes.func,
   onBuilderTurn: PropTypes.func,
   onRun: PropTypes.func,

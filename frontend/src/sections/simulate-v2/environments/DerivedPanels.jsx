@@ -93,13 +93,14 @@ function firstReadyTab(done) {
 */
 function liveTab(done) {
   if (done.includes("build")) return "scenarios";
-  if (done.includes("understand")) return "contract";
-  return firstReadyTab(done);
+  /* Until scenarios start, what's being produced is the contract — and it
+     fills in on the Overview's build table as the agent is read. */
+  return "overview";
 }
 
 export default function DerivedPanels({
   env, envState, patch, source, done, running, onBuilderTurn, onTabChange,
-  onBuilderPrompt, onStartRun, scenarioProgress,
+  onBuilderPrompt, onStartRun, scenarioProgress, contractProgress,
 }) {
   const [tab, setTab] = useState(() => firstReadyTab(done));
   const [touched, setTouched] = useState(false);
@@ -126,7 +127,10 @@ export default function DerivedPanels({
   */
   const readDone = done.includes("understand");
   const primed = !!envState && !!patch;
-  const isLoading = !readDone || !primed;
+  /* The illustration only covers the moment before anything is known —
+     once the first tool has been read, the contract shows as it's written. */
+  const contractStarted = (contractProgress?.tools || 0) > 0;
+  const isLoading = !primed || (!readDone && !contractStarted);
   const ready = (t) => !t.needs || done.includes(t.needs);
 
   /* Follow the derivation until the user picks something. */
@@ -166,9 +170,9 @@ export default function DerivedPanels({
   /* Panels see the world of the pinned environment version. */
   const worldEnv = useMemo(() => withPinnedWorld(env, envState), [env, envState]);
   const rendered = useMemo(() => renderPanel(current.id, {
-    env: worldEnv, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun,
+    env: worldEnv, envState, patch, source, onBuilderTurn, onGo: go, onBuilderPrompt, onStartRun, contractProgress,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [current.id, worldEnv, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun]);
+  }), [current.id, worldEnv, envState, patch, source, onBuilderTurn, onBuilderPrompt, onStartRun, contractProgress]);
 
   if (!env) return null;
 
@@ -337,27 +341,34 @@ DerivedPanels.propTypes = {
   onBuilderPrompt: PropTypes.func,
   onStartRun: PropTypes.func,
   scenarioProgress: PropTypes.object,
+  contractProgress: PropTypes.object,
 };
 
 /*
   "How many are we writing, and how far along are we" — the count the builder
-  committed to, and the rows landing in the table below as they are proved.
+  committed to, how many are written, and how many of those have passed their
+  checks. Each scenario is checked as it's written, so the two bars move
+  together, the proved one a step behind.
 */
 function ScenarioStreamStrip({ progress }) {
-  const { shown = 0, total = 0 } = progress || {};
-  const pct = total ? Math.round((shown / total) * 100) : 0;
+  const { shown = 0, total = 0, proved = 0, rewritten = 0 } = progress || {};
+  const pct = (n) => (total ? Math.round((n / total) * 100) : 0);
   return (
     <Box sx={{ pt: 2, pb: 0.5 }}>
-      <Stack direction="row" alignItems="baseline" spacing={1}>
+      <Stack direction="row" alignItems="baseline" spacing={1} flexWrap="wrap">
         <Typography sx={{ typography: "s2", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
           {`Writing scenarios · ${shown} of ${total}`}
         </Typography>
+        <Typography sx={{ typography: "s3", color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+          {`${proved} proved${rewritten ? ` · ${rewritten} rewritten` : ""}`}
+        </Typography>
         <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-          Each one is checked ready, solvable and not vacuous before it is kept.
+          {"Each is checked as it's written — ready, solvable, not vacuous — and kept only once it passes."}
         </Typography>
       </Stack>
-      <Box sx={{ mt: 1, height: 3, borderRadius: 2, bgcolor: "divider", overflow: "hidden" }}>
-        <Box sx={{ width: `${pct}%`, height: "100%", bgcolor: "text.disabled", transition: "width 0.3s ease" }} />
+      <Box sx={{ mt: 1, height: 3, borderRadius: 2, bgcolor: "divider", overflow: "hidden", position: "relative" }}>
+        <Box sx={{ position: "absolute", inset: 0, width: `${pct(shown)}%`, bgcolor: "text.disabled", opacity: 0.45, transition: "width 0.3s ease" }} />
+        <Box sx={{ position: "absolute", inset: 0, width: `${pct(proved)}%`, bgcolor: "text.secondary", transition: "width 0.3s ease" }} />
       </Box>
     </Box>
   );
@@ -387,7 +398,7 @@ function badgeCountFor(kind, env, envState) {
 }
 
 function renderPanel(id, ctx) {
-  const { env, envState, patch, source, onBuilderTurn, onGo, onBuilderPrompt, onStartRun } = ctx;
+  const { env, envState, patch, source, onBuilderTurn, onGo, onBuilderPrompt, onStartRun, contractProgress } = ctx;
   switch (id) {
     case "agent":     return <AgentsPanel env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderTurn={onBuilderTurn} />;
     case "world":     return <WorldPanel env={env} envState={envState} patch={patch} onGo={onGo} />;
@@ -395,7 +406,7 @@ function renderPanel(id, ctx) {
     case "scenarios": return <ScenariosStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode onBuilderPrompt={onBuilderPrompt} onStartRun={onStartRun} />;
     case "evals":     return <EvalsStep env={env} envState={envState} patch={patch} onGo={onGo} buildMode />;
     case "settings":  return <SettingsPanel env={env} envState={envState} patch={patch} />;
-    default:          return <OverviewPanel env={env} envState={envState} patch={patch} onGo={onGo} agentConnected={!!envState?.agent} source={source} buildMode />;
+    default:          return <OverviewPanel env={env} envState={envState} patch={patch} onGo={onGo} agentConnected={!!envState?.agent} source={source} buildMode contractProgress={contractProgress} />;
   }
 }
 

@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box, Stack, Typography, Button, IconButton, Tooltip, LinearProgress,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import Iconify from "src/components/iconify";
 import { paths } from "src/routes/paths";
 import RunResults from "./RunResults";
@@ -19,12 +20,31 @@ import { BOOT_STEPS } from "../_mock/runStream";
 import { SHADOW_SUMMARY } from "../_mock/sandbox";
 import { useSimStore, useEnvState } from "../store";
 import {
-  StatusDot, StatusChip, ScorePill, EmptyState, PersonaBadge, pulse,
+  StatusDot, StatusChip, ScorePill, EmptyState, pulse,
 } from "../components/primitives";
 import { ProvisioningPanel } from "../components/loading";
 import useRunPlayer from "./useRunPlayer";
 import Stage from "./stages";
 import { gradedRuleIds } from "../_mock/provenance";
+import { admissionOf } from "../_mock/coverage";
+import { subTasksFor } from "../_mock/contract";
+import BlockerFlag from "../workspace/scenarios/BlockerFlag";
+import { milestoneOf } from "../_mock/runScripts";
+
+const FLAKY = "#D97706";
+const UNMEASURED = "#9AA0A6";
+const RED = "#DC2626";
+
+/* Why a scenario can't be run on this world, or null when it can. Only proved
+   scenarios are ever run — the rest are listed as skipped, not run and then
+   written off as "not measured". */
+const skipReasonFor = (sc, envLabel) => {
+  if (sc.provedBroke && (!sc.brokeAgainst || !envLabel || sc.brokeAgainst === envLabel)) {
+    return "Its proof broke when the environment changed. Re-prove it to run it again.";
+  }
+  const adm = admissionOf(sc);
+  return adm.admitted ? null : `Quarantined — ${adm.reason}`;
+};
 
 /**
  * The live run.
@@ -71,16 +91,28 @@ export default function LiveRunView() {
     : currentEnvVersion(env, envState)?.label;
   /* Only the scenarios that exist in this environment version — ones a later
      rebuild added for a tool this world never learned are not part of it. */
-  const scenarios = useMemo(() => {
+  const { scenarios, skipped, poolSize } = useMemo(() => {
     const inVersion = scenariosInEnvVersion(envState, runEnv);
-    if (!only) return inVersion;
-    const wanted = new Set(only.split(","));
-    const subset = inVersion.filter((sc) => wanted.has(sc.id));
-    return subset.length ? subset : inVersion;
+    let pool = inVersion;
+    if (only) {
+      const wanted = new Set(only.split(","));
+      const subset = inVersion.filter((sc) => wanted.has(sc.id));
+      pool = subset.length ? subset : inVersion;
+    }
+    const run = [];
+    const skip = [];
+    pool.forEach((sc) => {
+      const why = skipReasonFor(sc, runEnv);
+      if (why) skip.push({ ...sc, skipReason: why });
+      else run.push(sc);
+    });
+    return { scenarios: run, skipped: skip, poolSize: inVersion.length };
     /* Keyed on the scenario list, not the whole env state — recording the run
        itself updates the env state, and must not rebuild the run mid-flight. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [only, envState.scenarios, runEnv]);
+  /* A re-run of some scenarios, not the whole set. */
+  const partial = !!only && scenarios.length + skipped.length < poolSize;
 
   /*
     Trials per scenario (PRD §10.2 AC-10.7 — reliability across
@@ -114,7 +146,7 @@ export default function LiveRunView() {
   });
 
   const {
-    phase, start, tasks, focus, focusId, setFocusId, stats, elapsed,
+    phase, start, finishNow, tasks, focus, focusId, setFocusId, stats, elapsed,
     sinceLastEvent, stalled,
   } = player;
 
@@ -278,6 +310,8 @@ export default function LiveRunView() {
       /* And the cast of actors it ran with. */
       actors: inputs.actors.map((a) => a.id),
       scenarioIds: scenarios.map((sc) => sc.id),
+      /* Left out because they aren't proved on this world. */
+      skippedIds: skipped.map((sc) => sc.id),
       repeats,
       partial: !!only,
       ordinal: Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1,
@@ -373,6 +407,26 @@ export default function LiveRunView() {
     );
   }
 
+  if (!readOnly && scenarios.length === 0 && skipped.length) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <EmptyState
+          icon="solar:shield-cross-linear"
+          title="Nothing proved to run"
+          body={`All ${skipped.length} scenario${skipped.length === 1 ? " needs" : "s need"} re-proving on environment ${runEnv} before a run can give them a verdict.`}
+          action={
+            <Button
+              variant="contained" color="primary" size="small"
+              onClick={() => navigate(paths.dashboard.simulate.environmentStep(envId, "scenarios"))}
+            >
+              Go to scenarios
+            </Button>
+          }
+        />
+      </Box>
+    );
+  }
+
   /* ── a finished run, read back ── */
   if (readOnly) {
     return (
@@ -399,7 +453,7 @@ export default function LiveRunView() {
             /* What this run is actually about to do — a re-run of four
                scenarios is not "17 tasks", and the boot panel is the first
                place that claim appears. */
-            subtitle={`${scenarios.length}${only ? ` of ${envState.scenarios.length}` : ""} tasks × ${repeats} samples · 4 workers · a shadow agent and a fresh copy of ${env.name} per task`}
+            subtitle={`${scenarios.length}${partial ? ` of ${poolSize}` : ""} scenario${scenarios.length === 1 ? "" : "s"} × ${repeats} repeat${repeats === 1 ? "" : "s"} · 4 at a time · agent ${runAgent} on a fresh sandbox copy of environment ${runEnv} for each${skipped.length ? ` · ${skipped.length} skipped, not proved` : ""}`}
             steps={BOOT_STEPS[surface.stage] || BOOT_STEPS.voice}
             onDone={start}
           />
@@ -415,6 +469,20 @@ export default function LiveRunView() {
 
   /* ── live ── */
   const live = focus && ["running", "grading"].includes(focus.status);
+
+  /* The run's number — the same one the Runs tab lists it under. */
+  const ordinal = stored?.ordinal
+    ?? Math.max(0, ...(envState.runs || []).map((r) => r.ordinal || 0)) + 1;
+
+  /* Release blockers, counted as they settle. One failing is the thing worth
+     knowing before the run ends. */
+  const blockers = tasks.filter((t) => t.critical);
+  const blockersPassed = blockers.filter((t) => t.status === "passed").length;
+  const blockersFailed = blockers.filter((t) => t.status === "failed");
+
+  /* Tools the agent calls that this world can't answer — the run was started
+     anyway, and scenarios that reach for them come back not measured. */
+  const toolGap = toolFit(env, envState, { agent: runAgent, envVersion: runEnv }).missing.map((t) => t.name);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -437,25 +505,22 @@ export default function LiveRunView() {
           <Box minWidth={0} flex={1}>
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography noWrap sx={{ typography: "s1_2", fontWeight: 700 }}>
-                Simulation running
+                Run {ordinal}
               </Typography>
               <StatusChip status="running" />
+              {partial && (
+                <Chip label={`Re-run · ${scenarios.length} of ${poolSize} scenarios`} />
+              )}
               {/* The isolation claim, where a viewer is most likely to doubt it. */}
               <Tooltip arrow title={SHADOW_SUMMARY}>
-                <Stack
-                  direction="row" alignItems="center" spacing={0.5}
-                  sx={{
-                    px: 0.75, height: 22, borderRadius: 0.75, color: "text.subtitle",
-                    border: "1px solid", borderColor: "divider",
-                  }}
-                >
-                  <Iconify icon="solar:shield-keyhole-linear" width={12} />
-                  <Typography sx={{ typography: "s3", fontWeight: 600 }}>shadow sandbox</Typography>
-                </Stack>
+                <Box sx={{ display: "flex" }}>
+                  <Chip icon="solar:shield-keyhole-linear" label="Sandbox" />
+                </Box>
               </Tooltip>
             </Stack>
             <Typography noWrap sx={{ typography: "s2", color: "text.subtitle" }}>
-              {env.name} · {stats.done}/{stats.total} tasks complete · {formatMs(elapsed)} elapsed
+              {env.name} · agent {runAgent} on environment {runEnv} · {stats.done} of {stats.total} scenarios done
+              {repeats > 1 ? ` · ${repeats} repeats each` : ""} · {formatMs(elapsed)} elapsed
             </Typography>
             {/*
               Slow and stalled look identical on a progress bar, and telling
@@ -468,11 +533,11 @@ export default function LiveRunView() {
                 <Box
                   sx={{
                     width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                    bgcolor: stalled ? "#DC2626" : "#16A34A",
+                    bgcolor: stalled ? RED : "#16A34A",
                     animation: stalled ? "none" : `${pulse} 1.6s ease-in-out infinite`,
                   }}
                 />
-                <Typography sx={{ typography: "s3", color: stalled ? "#DC2626" : "text.subtitle" }}>
+                <Typography sx={{ typography: "s3", color: stalled ? RED : "text.subtitle" }}>
                   {stalled
                     ? `No heartbeat for ${sinceLastEvent}s — the run may be stalled`
                     : `Healthy · last event ${sinceLastEvent}s ago`}
@@ -482,15 +547,20 @@ export default function LiveRunView() {
           </Box>
 
           <LiveCounter label="Passed" value={stats.passed} color="#16A34A" />
-          <LiveCounter label="Failed" value={stats.failed} color="#DC2626" />
+          <LiveCounter label="Failed" value={stats.failed} color={RED} />
+          <LiveCounter
+            label="Flaky" value={stats.flaky} color={FLAKY}
+            hint="Repeats disagreed — passed some, failed others."
+          />
+          <LiveCounter
+            label="Not measured" value={stats.unmeasured} color={UNMEASURED}
+            hint="Nothing could be scored — an environment or grading fault, not the agent's."
+          />
           <LiveCounter label="Running" value={stats.active} color="#2563EB" />
 
           <Tooltip title="Stop run" arrow>
-            <IconButton
-              size="small"
-              onClick={() => navigate(paths.dashboard.simulate.environmentStep(envId, "runs"))}
-            >
-              <Iconify icon="solar:stop-circle-linear" width={19} sx={{ color: "#DC2626" }} />
+            <IconButton size="small" onClick={finishNow}>
+              <Iconify icon="solar:stop-circle-linear" width={19} sx={{ color: RED }} />
             </IconButton>
           </Tooltip>
         </Stack>
@@ -505,20 +575,58 @@ export default function LiveRunView() {
         />
       </Box>
 
+      {/* ── what to know about this run ── */}
+      {(blockers.length > 0 || toolGap.length > 0 || skipped.length > 0) && (
+        <Stack
+          direction="row" alignItems="center" spacing={2.5} flexWrap="wrap" rowGap={0.75}
+          sx={{ px: 3, py: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}
+        >
+          {blockers.length > 0 && (
+            <Tooltip
+              arrow
+              title={blockersFailed.length
+                ? `Failed: ${blockersFailed.map((t) => t.name || t.title).join(", ")}. Any release blocker failing blocks the release.`
+                : "Any release blocker failing blocks the release, however high the pass rate."}
+            >
+              <Stack direction="row" alignItems="center" spacing={0.625}>
+                <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: RED }} />
+                <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                  Release blockers · <b>{blockersPassed} of {blockers.length}</b> passed
+                </Typography>
+                {blockersFailed.length > 0 && (
+                  <Typography sx={{ typography: "s3", fontWeight: 700, color: RED }}>
+                    · {blockersFailed.length} failed
+                  </Typography>
+                )}
+              </Stack>
+            </Tooltip>
+          )}
+          {toolGap.length > 0 && (
+            <Stack direction="row" alignItems="center" spacing={0.625}>
+              <Iconify icon="solar:plug-circle-linear" width={14} sx={{ color: "#CA8A04" }} />
+              <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                Environment {runEnv} can&apos;t answer {toolGap.join(", ")} — scenarios that call {toolGap.length === 1 ? "it" : "them"} come back not measured.
+              </Typography>
+            </Stack>
+          )}
+          {skipped.length > 0 && (
+            <Tooltip arrow title="Only proved scenarios are run. Re-prove these on the Scenarios tab to include them.">
+              <Stack direction="row" alignItems="center" spacing={0.625}>
+                <Iconify icon="solar:shield-cross-linear" width={14} sx={{ color: "text.subtitle" }} />
+                <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+                  {skipped.length} skipped — not proved on environment {runEnv}
+                </Typography>
+              </Stack>
+            </Tooltip>
+          )}
+        </Stack>
+      )}
+
       {/* ── three columns ── */}
       <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
-        {/* tasks */}
+        {/* scenarios */}
         <Box sx={{ width: 300, flexShrink: 0, borderRight: "1px solid", borderColor: "divider", overflow: "auto", display: { xs: "none", md: "block" } }}>
-          <Typography
-            sx={{
-              px: 2, py: 1.25, typography: "s3", fontWeight: 700, color: "text.subtitle",
-              textTransform: "uppercase", letterSpacing: .4,
-              position: "sticky", top: 0, bgcolor: "background.default", zIndex: 1,
-              borderBottom: "1px solid", borderColor: "divider",
-            }}
-          >
-            Tasks ({stats.total})
-          </Typography>
+          <ColumnLabel sticky>Scenarios ({stats.total})</ColumnLabel>
           <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
             {tasks.map((t) => (
               <TaskRow
@@ -529,6 +637,14 @@ export default function LiveRunView() {
               />
             ))}
           </Stack>
+          {skipped.length > 0 && (
+            <>
+              <ColumnLabel>Skipped · not proved ({skipped.length})</ColumnLabel>
+              <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
+                {skipped.map((sc) => <SkippedRow key={sc.id} scenario={sc} />)}
+              </Stack>
+            </>
+          )}
         </Box>
 
         {/* stage */}
@@ -541,12 +657,20 @@ export default function LiveRunView() {
               >
                 <StatusDot status={focus.status} />
                 <Box minWidth={0} flex={1}>
-                  <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>{focus.title}</Typography>
+                  <Typography noWrap sx={{ typography: "s2", fontWeight: 700 }}>{focus.name || focus.title}</Typography>
                   <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{focus.task}</Typography>
                 </Box>
-                <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
-                  step {Math.max(0, focus.stepIndex) + 1}/{focus.steps.length}
-                </Typography>
+                <Tooltip
+                  arrow
+                  title={repeats > 1
+                    ? `The first repeat plays here turn by turn. The other ${repeats - 1} run alongside it and count toward the verdict.`
+                    : ""}
+                >
+                  <Typography sx={{ typography: "s3", color: "text.subtitle", flexShrink: 0 }}>
+                    {focus.stepIndex < 0 ? "Queued" : `Turn ${focus.stepIndex + 1} of ${focus.steps.length}`}
+                    {repeats > 1 ? ` · repeat 1 of ${repeats}` : ""}
+                  </Typography>
+                </Tooltip>
               </Stack>
               <Stage
                 stage={surface.stage}
@@ -554,6 +678,7 @@ export default function LiveRunView() {
                 stepIndex={focus.stepIndex}
                 live={live}
                 twinBacking={envState?.twinBacking}
+                agentVersion={`Agent ${runAgent}`}
               />
             </>
           )}
@@ -561,7 +686,7 @@ export default function LiveRunView() {
 
         {/* live evals */}
         <Box sx={{ width: 288, flexShrink: 0, borderLeft: "1px solid", borderColor: "divider", overflow: "auto", display: { xs: "none", lg: "block" } }}>
-          <LiveEvalPanel task={focus} evals={evals} />
+          <LiveEvalPanel task={focus} evals={evals} env={env} />
         </Box>
       </Box>
     </Box>
@@ -570,21 +695,68 @@ export default function LiveRunView() {
 
 /* ── pieces ──────────────────────────────────────────────────────────────── */
 
-function LiveCounter({ label, value, color }) {
+function ColumnLabel({ children, sticky }) {
   return (
-    <Stack alignItems="center" sx={{ px: 1, display: { xs: "none", sm: "flex" } }}>
-      <Typography sx={{ typography: "s1", fontWeight: 700, color, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>
-        {value}
-      </Typography>
-      <Typography sx={{ typography: "s3", color: "text.subtitle" }}>{label}</Typography>
+    <Typography
+      sx={{
+        px: 2, py: 1.25, typography: "s3", fontWeight: 700, color: "text.subtitle",
+        textTransform: "uppercase", letterSpacing: 0.4,
+        borderBottom: "1px solid", borderColor: "divider",
+        ...(sticky
+          ? { position: "sticky", top: 0, bgcolor: "background.default", zIndex: 1 }
+          : { borderTop: "1px solid", borderTopColor: "divider" }),
+      }}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+function Chip({ icon, label }) {
+  return (
+    <Stack
+      direction="row" alignItems="center" spacing={0.5}
+      sx={{
+        px: 0.75, height: 22, borderRadius: 0.75, color: "text.subtitle", flexShrink: 0,
+        border: "1px solid", borderColor: "divider",
+      }}
+    >
+      {icon && <Iconify icon={icon} width={12} />}
+      <Typography noWrap sx={{ typography: "s3", fontWeight: 600 }}>{label}</Typography>
     </Stack>
   );
 }
+
+function LiveCounter({ label, value, color, hint }) {
+  const counter = (
+    <Stack alignItems="center" sx={{ px: 1, display: { xs: "none", sm: "flex" } }}>
+      <Typography
+        sx={{
+          typography: "s1", fontWeight: 700, lineHeight: 1.1, fontVariantNumeric: "tabular-nums",
+          color: value ? color : "text.disabled",
+        }}
+      >
+        {value}
+      </Typography>
+      <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>{label}</Typography>
+    </Stack>
+  );
+  return hint ? <Tooltip arrow title={hint}>{counter}</Tooltip> : counter;
+}
+
+/* How a finished scenario came out, across its repeats. */
+const resultText = (task) => {
+  if (task.status === "unmeasured") return { text: "Not measured", color: UNMEASURED };
+  if (!["passed", "failed", "flaky"].includes(task.status)) return null;
+  const color = { passed: "#16A34A", failed: RED, flaky: FLAKY }[task.status];
+  return { text: task.repeats > 1 ? `${task.passes}/${task.repeats}` : task.status === "passed" ? "Passed" : "Failed", color };
+};
 
 function TaskRow({ task, active, onClick }) {
   const progress = task.steps.length
     ? ((task.stepIndex + 1) / task.steps.length) * 100
     : 0;
+  const result = resultText(task);
   return (
     <Box
       onClick={onClick}
@@ -601,17 +773,22 @@ function TaskRow({ task, active, onClick }) {
         <StatusDot status={task.status} size={7} />
         <Box flex={1} minWidth={0}>
           <Stack direction="row" alignItems="center" spacing={0.5}>
-            <Typography noWrap sx={{ typography: "s2", fontWeight: active ? 700 : 500 }}>
-              {task.title}
+            <Typography noWrap sx={{ typography: "s2", fontWeight: active ? 700 : 600 }}>
+              {task.name || task.title}
             </Typography>
-            {task.critical && (
-              <Iconify icon="solar:danger-triangle-bold" width={11} sx={{ color: "text.subtitle", flexShrink: 0 }} />
-            )}
+            <BlockerFlag row={task} reason={task.blockerReason} size={12} />
           </Stack>
           <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>
-            {task.persona?.name}
+            {[task.summary, task.persona?.name].filter(Boolean).join(" · ")}
           </Typography>
         </Box>
+        {result && (
+          <Tooltip arrow title={task.repeats > 1 ? `Passed ${task.passes} of ${task.repeats} repeats` : ""}>
+            <Typography sx={{ typography: "s3", fontWeight: 700, color: result.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+              {result.text}
+            </Typography>
+          </Tooltip>
+        )}
       </Stack>
 
       {["running", "grading"].includes(task.status) && (
@@ -628,35 +805,55 @@ function TaskRow({ task, active, onClick }) {
   );
 }
 
+function SkippedRow({ scenario }) {
+  return (
+    <Tooltip arrow placement="right" title={scenario.skipReason}>
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2, py: 1.25, opacity: 0.7 }}>
+        <Iconify icon="solar:shield-cross-linear" width={12} sx={{ color: "text.disabled", flexShrink: 0 }} />
+        <Box flex={1} minWidth={0}>
+          <Typography noWrap sx={{ typography: "s2", fontWeight: 600, color: "text.secondary" }}>
+            {scenario.name || scenario.title}
+          </Typography>
+          <Typography noWrap sx={{ typography: "s3", color: "text.subtitle" }}>Skipped — needs re-proving</Typography>
+        </Box>
+      </Stack>
+    </Tooltip>
+  );
+}
+
 /**
- * Evals scoring in real time.
+ * The right-hand column, in the order things happen.
  *
- * They resolve one at a time as the grader works through them, which is both
- * honest about how grading actually runs and far more legible than every score
- * appearing at once.
+ * Sub-goals first: they move turn by turn, ticking on the line where the
+ * agent actually did the thing. Evals next: they only score once the
+ * conversation ends, one grader at a time. Then what a pass looks like, and
+ * who is calling.
  */
-function LiveEvalPanel({ task, evals }) {
+function LiveEvalPanel({ task, evals, env }) {
   if (!task) return null;
   const grading = task.status === "grading";
   const settled = ["passed", "failed", "flaky", "unmeasured"].includes(task.status);
+  const goals = subGoalStates(task, env);
 
   return (
     <Box>
-      <Typography
-        sx={{
-          px: 2, py: 1.25, typography: "s3", fontWeight: 700, color: "text.subtitle",
-          textTransform: "uppercase", letterSpacing: .4,
-          borderBottom: "1px solid", borderColor: "divider",
-        }}
-      >
-        Evals
-      </Typography>
+      {goals.length > 0 && (
+        <>
+          <ColumnLabel>
+            Sub-goals · {goals.filter((g) => g.state === "met").length} of {goals.length}
+          </ColumnLabel>
+          <Stack spacing={1.125} sx={{ px: 2, py: 1.5 }}>
+            {goals.map((g) => <SubGoalRow key={g.id} goal={g} />)}
+          </Stack>
+        </>
+      )}
 
+      <ColumnLabel>Evals</ColumnLabel>
       {evals.length === 0 ? (
         <EmptyState
           icon="solar:shield-cross-linear"
           title="No evals applied"
-          body="You'll get traces, but nothing scoring whether the agent was right."
+          body="You'll get transcripts, but nothing scoring whether the agent was right."
         />
       ) : (
         <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
@@ -677,7 +874,7 @@ function LiveEvalPanel({ task, evals }) {
                   <ScorePill score={r.score} passed={r.passed} label={r.reason} />
                 ) : (
                   <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
-                    {task.status === "queued" ? "—" : "pending"}
+                    {task.status === "queued" ? "—" : task.status === "running" ? "After the call" : "Scoring…"}
                   </Typography>
                 )}
               </Stack>
@@ -686,18 +883,140 @@ function LiveEvalPanel({ task, evals }) {
         </Stack>
       )}
 
-      {/* Scenario context — what "right" looks like for this task. */}
-      <Box sx={{ p: 2, borderTop: "1px solid", borderColor: "divider" }}>
-        <Typography sx={{ typography: "s3", fontWeight: 700, color: "text.subtitle", textTransform: "uppercase", letterSpacing: .4, mb: 1.25 }}>
-          Scenario
+      {/* What a pass looks like — the line the evals grade against. */}
+      <ColumnLabel>Passes when</ColumnLabel>
+      <Stack spacing={1.25} sx={{ p: 2 }}>
+        <Typography sx={{ typography: "s2", color: "text.primary" }}>
+          {(task.expected || "").replace(/\."\.$/, "\".")}
         </Typography>
-        <PersonaBadge persona={task.persona} />
-        <Stack direction="row" spacing={0.875} sx={{ mt: 1.5 }}>
-          <Iconify icon="solar:target-linear" width={14} sx={{ color: "text.subtitle", flexShrink: 0, mt: "2px" }} />
-          <Typography sx={{ typography: "s3", color: "text.secondary" }}>{task.expected}</Typography>
-        </Stack>
-      </Box>
+        {task.critical && (
+          <Stack direction="row" spacing={0.75} alignItems="flex-start">
+            <Iconify icon="solar:danger-triangle-bold" width={13} sx={{ color: RED, flexShrink: 0, mt: "2px" }} />
+            <Typography sx={{ typography: "s3", color: "text.secondary" }}>
+              <b>Release blocker</b> · {shortReason(task.blockerReason)}
+            </Typography>
+          </Stack>
+        )}
+      </Stack>
+
+      {/* Who is calling. The call header has the name; this has the rest. */}
+      {task.persona && (
+        <>
+          <ColumnLabel>Caller</ColumnLabel>
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ p: 2 }}>
+            <Box
+              sx={{
+                width: 28, height: 28, borderRadius: "50%", display: "grid", placeItems: "center", flexShrink: 0,
+                bgcolor: (t) => alpha(t.palette.primary.main, 0.12), color: "primary.main",
+                typography: "s3", fontWeight: 700,
+              }}
+            >
+              {task.persona.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+            </Box>
+            <Box minWidth={0}>
+              <Typography sx={{ typography: "s2", fontWeight: 600 }}>
+                {task.persona.name}
+                <Box component="span" sx={{ color: "text.subtitle", fontWeight: 400 }}>
+                  {task.persona.age ? ` · ${task.persona.age}` : task.persona.role ? ` · ${task.persona.role}` : ""}
+                </Box>
+              </Typography>
+              {/* Wraps — a trait cut off mid-word is a trait nobody reads. */}
+              <Typography sx={{ typography: "s3", color: "text.subtitle" }}>
+                {[...(task.persona.traits || []), task.persona.voice].filter(Boolean).join(" · ")}
+              </Typography>
+            </Box>
+          </Stack>
+        </>
+      )}
     </Box>
+  );
+}
+
+/* The blocker reason without the rule quoted again — "Passes when" just said it. */
+const shortReason = (reason) => (reason || "any failure here blocks the release.")
+  .replace(/:\s*“.*”\.?$/, ".")
+  .replace(/^./, (c) => c.toLowerCase());
+
+/*
+  Where each sub-goal stands, read from the conversation itself.
+
+  A script tags the turn that meets each milestone (verify, recognise, act,
+  close), so a sub-goal ticks on that line. One whose wording isn't familiar is
+  spread across the call instead. A failing run fails at its crux: what was
+  due there, and everything after it, is missed.
+*/
+function subGoalStates(task, env) {
+  const raw = task.subTasks?.length ? task.subTasks : subTasksFor(task, env);
+  const n = raw.length;
+  const last = task.steps.length - 1;
+  const turnFor = (milestone, k) => {
+    const at = milestone ? task.steps.findIndex((st) => st.meets?.includes(milestone)) : -1;
+    return at >= 0 ? at : Math.floor(((k + 1) / n) * last);
+  };
+  const failAt = task.failStep;
+  const reached = task.stepIndex;
+  const done = ["passed", "failed", "flaky"].includes(task.status) || task.status === "grading";
+  const rows = raw.map((g, k) => {
+    const label = typeof g === "string" ? g : g.label;
+    const turn = turnFor(milestoneOf(label, k, n), k);
+    let state = "open";
+    if (task.status === "unmeasured") state = "unscored";
+    else if (failAt != null && turn >= failAt && (reached >= failAt || done)) state = "missed";
+    else if (reached >= turn) state = "met";
+    return { id: typeof g === "string" ? `${task.id}::${k}` : g.id, label, turn, state };
+  });
+  /* The one the conversation is working towards now. */
+  if (task.status === "running") {
+    const next = rows.filter((r) => r.state === "open").sort((a, b) => a.turn - b.turn)[0];
+    if (next) next.state = "active";
+  }
+  return rows;
+}
+
+function SubGoalRow({ goal }) {
+  const meta = {
+    met: { icon: "solar:check-circle-bold", color: "#16A34A", note: `turn ${goal.turn + 1}` },
+    missed: { icon: "solar:close-circle-bold", color: RED, note: "missed" },
+    unscored: { note: "not measured" },
+    active: { note: "in progress" },
+    open: {},
+  }[goal.state];
+  return (
+    <Stack direction="row" spacing={0.875} alignItems="flex-start">
+      {meta.icon ? (
+        <Iconify icon={meta.icon} width={14} sx={{ color: meta.color, flexShrink: 0, mt: "2px" }} />
+      ) : (
+        /* Not reached yet — a plain ring, drawn rather than fetched. The one
+           being worked on now pulses in the accent. */
+        <Box
+          sx={{
+            width: 12, height: 12, m: "3px 1px 0", borderRadius: "50%", flexShrink: 0,
+            border: "1.5px solid",
+            borderColor: goal.state === "active" ? "primary.main" : "text.disabled",
+            ...(goal.state === "active" && { animation: `${pulse} 1.4s ease-in-out infinite` }),
+          }}
+        />
+      )}
+      <Typography
+        sx={{
+          flex: 1, minWidth: 0, typography: "s3",
+          color: goal.state === "open" || goal.state === "unscored" ? "text.subtitle" : "text.secondary",
+          fontWeight: goal.state === "active" ? 600 : 400,
+        }}
+      >
+        {goal.label}
+      </Typography>
+      {meta.note && (
+        <Typography
+          sx={{
+            typography: "s3", flexShrink: 0, whiteSpace: "nowrap",
+            color: goal.state === "missed" ? RED : goal.state === "active" ? "primary.main" : "text.disabled",
+          }}
+        >
+          {meta.note}
+        </Typography>
+      )}
+    </Stack>
   );
 }
 
@@ -706,10 +1025,14 @@ function formatMs(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+ColumnLabel.propTypes = { children: PropTypes.node, sticky: PropTypes.bool };
+Chip.propTypes = { icon: PropTypes.string, label: PropTypes.string };
+
 LiveCounter.propTypes = {
   label: PropTypes.string,
   value: PropTypes.node,
   color: PropTypes.string,
+  hint: PropTypes.string,
 };
 
 TaskRow.propTypes = {
@@ -718,7 +1041,11 @@ TaskRow.propTypes = {
   onClick: PropTypes.func,
 };
 
+SkippedRow.propTypes = { scenario: PropTypes.object };
+SubGoalRow.propTypes = { goal: PropTypes.object };
+
 LiveEvalPanel.propTypes = {
   task: PropTypes.object,
   evals: PropTypes.array,
+  env: PropTypes.object,
 };

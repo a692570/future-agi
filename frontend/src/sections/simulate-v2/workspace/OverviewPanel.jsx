@@ -49,7 +49,7 @@ import { agentToolsFor } from "../_mock/toolFit";
 const seedBlurb = (rows) =>
   `${rows.toLocaleString()} rows that fill this environment before your agent arrives — the world it actually works in. Rebuilt for every task, so nothing carries over.`;
 
-export default function OverviewPanel({ buildMode, env, envState, patch, onGo, agentConnected, locked = false, onFork }) {
+export default function OverviewPanel({ buildMode, env, envState, patch, onGo, agentConnected, locked = false, onFork, contractProgress }) {
 
   /*
     Nikhil's env-first feedback: agent version management stays inside
@@ -248,8 +248,8 @@ export default function OverviewPanel({ buildMode, env, envState, patch, onGo, a
         back to three weeks later to see which decisions a human
         made and which the reader made itself.
       */}
-      {showRichOverview && (
-        <SourceToSandboxMap env={env} envState={envState} patch={patch} />
+      {(showRichOverview || contractProgress?.streaming) && (
+        <SourceToSandboxMap env={env} envState={envState} patch={patch} progress={contractProgress} />
       )}
       <Grid container spacing={2} alignItems="flex-start" sx={{ mb: 3 }}>
         <Grid item xs={12} md={7}>
@@ -409,6 +409,9 @@ OverviewPanel.propTypes = {
   agentConnected: PropTypes.bool,
   locked: PropTypes.bool,
   onFork: PropTypes.func,
+  /* While a build is reading the agent: how many tools, rules and stores it
+     has found so far — the build table fills in as they land. */
+  contractProgress: PropTypes.object,
 };
 
 /**
@@ -1737,10 +1740,23 @@ NextStepsChecklist.propTypes = {
 const MAP_GRID = "minmax(0, 1fr) min-content 24px minmax(0, 1fr)";
 const MAP_PX = 3;
 
-function SourceToSandboxMap({ env, envState, patch }) {
-  const tools = env?.tools || [];
-  const ruleProv = provenanceFor(env).rules;
-  const tables = env?.seed?.tables || [];
+function SourceToSandboxMap({ env, envState, patch, progress }) {
+  /*
+    While the build is still reading the agent, the table is the contract
+    being written: tools appear as their signatures are read, then rules as
+    they're separated from the prompt, then the stores the world is seeded
+    with — each group counting what it has found so far. Once the build is
+    done it's the full record, as before.
+  */
+  const streaming = !!progress?.streaming;
+  const allTools = env?.tools || [];
+  const allRules = provenanceFor(env).rules;
+  const allTables = env?.seed?.tables || [];
+  const tools = streaming ? allTools.slice(0, progress.tools || 0) : allTools;
+  const ruleProv = streaming ? allRules.slice(0, progress.rules || 0) : allRules;
+  const tables = streaming ? allTables.slice(0, progress.stores || 0) : allTables;
+  /* A group's count line: how far along it is while reading, what it holds after. */
+  const found = (shown, total, done) => (streaming && shown < total ? `${shown} of ${total} found` : done);
 
   const classifyTool = (t) => {
     const n = t.name.toLowerCase();
@@ -1797,9 +1813,16 @@ function SourceToSandboxMap({ env, envState, patch }) {
     >
       {/* Title band */}
       <Box sx={{ px: MAP_PX, py: 2, borderBottom: "1px solid", borderColor: "divider" }}>
-        <Typography sx={{ typography: "s1", fontWeight: 700 }}>How the world was built</Typography>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Typography sx={{ typography: "s1", fontWeight: 700 }}>
+            {streaming ? "Writing the contract" : "How the world was built"}
+          </Typography>
+          {streaming && <CircularProgress size={12} thickness={5} sx={{ color: "text.disabled" }} />}
+        </Stack>
         <Typography sx={{ typography: "s2", color: "text.subtitle", mt: 0.25, maxWidth: 720 }}>
-          Every derived fact carries where it was read from and what it became in the sandbox. Rows the reader could not classify carry a resolve control right on the row.
+          {streaming
+            ? "Filling in as the builder reads your agent — tools first, then the rules, then the data the world is seeded with. Each carries where it was read from."
+            : "Every derived fact carries where it was read from and what it became in the sandbox. Rows the reader could not classify carry a resolve control right on the row."}
         </Typography>
       </Box>
 
@@ -1820,9 +1843,10 @@ function SourceToSandboxMap({ env, envState, patch }) {
 
       {/* Groups */}
       <MapGroup label="Tools" hint="from the agent config & call-graph"
-        right={`${tools.length} mapped${toAnswer ? ` · ${toAnswer} to answer` : ""}`}
+        right={found(tools.length, allTools.length, `${tools.length} mapped${toAnswer ? ` · ${toAnswer} to answer` : ""}`)}
         toAnswer={toAnswer} first
       >
+        {streaming && tools.length < allTools.length && <ReadingRow what="tool signatures" />}
         {toolRows.map((r, i) => (
           <MapRow
             key={r.key}
@@ -1844,8 +1868,11 @@ function SourceToSandboxMap({ env, envState, patch }) {
       </MapGroup>
 
       <MapGroup label="Rules" hint="from policy.yaml, enforced"
-        right={`${ruleProv.length} mapped`}
+        right={found(ruleProv.length, allRules.length, `${ruleProv.length} mapped`)}
       >
+        {streaming && ruleProv.length < allRules.length && (
+          <ReadingRow what={tools.length < allTools.length ? "after the tools" : "rules from the code and prompt"} waiting={tools.length < allTools.length} />
+        )}
         {ruleProv.map((r, i) => (
           <MapRow
             key={r.id}
@@ -1859,8 +1886,11 @@ function SourceToSandboxMap({ env, envState, patch }) {
       </MapGroup>
 
       <MapGroup label="Stores" hint="from your fixtures"
-        right={`${tables.length} mapped · 1 derived`}
+        right={found(tables.length, allTables.length, `${tables.length} mapped · 1 derived`)}
       >
+        {streaming && tables.length < allTables.length && (
+          <ReadingRow what={ruleProv.length < allRules.length ? "once the rules are in" : "the data the world is seeded with"} waiting={ruleProv.length < allRules.length} />
+        )}
         {tables.map((t, i) => (
           <MapRow
             key={t.name}
@@ -1871,15 +1901,18 @@ function SourceToSandboxMap({ env, envState, patch }) {
             mono
           />
         ))}
-        <MapRow
-          index={tables.length}
-          name={null}
-          origin={null}
-          target="appointments (empty)"
-          derived
-        />
+        {!streaming && (
+          <MapRow
+            index={tables.length}
+            name={null}
+            origin={null}
+            target="appointments (empty)"
+            derived
+          />
+        )}
       </MapGroup>
 
+      {!streaming && (
       <MapGroup label="Actors" hint="from the call-graph & prompt"
         right={`${actorMapped} mapped · ${actors.length - actorMapped} derived`}
       >
@@ -1895,12 +1928,29 @@ function SourceToSandboxMap({ env, envState, patch }) {
           />
         ))}
       </MapGroup>
+      )}
     </Box>
   );
 }
 SourceToSandboxMap.propTypes = {
-  env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func,
+  env: PropTypes.object, envState: PropTypes.object, patch: PropTypes.func, progress: PropTypes.object,
 };
+
+/* The row a group shows while its items are still being read — or, for a
+   group whose turn hasn't come, what it's waiting on. */
+function ReadingRow({ what, waiting }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={1} sx={{ px: MAP_PX, py: 0.75 }}>
+      {waiting
+        ? <Iconify icon="solar:clock-circle-linear" width={13} sx={{ color: "text.disabled" }} />
+        : <CircularProgress size={11} thickness={5} sx={{ color: "text.disabled" }} />}
+      <Typography sx={{ typography: "s3", color: "text.disabled" }}>
+        {waiting ? `Next — ${what}` : `Reading ${what}…`}
+      </Typography>
+    </Stack>
+  );
+}
+ReadingRow.propTypes = { what: PropTypes.string, waiting: PropTypes.bool };
 
 function ColHead({ children }) {
   return (

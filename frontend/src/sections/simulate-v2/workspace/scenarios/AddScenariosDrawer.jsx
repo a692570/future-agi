@@ -136,14 +136,11 @@ export default function AddScenariosDrawer({ open, onClose, env, envState, selec
           </Box>
           <Button
             size="small"
-            variant="outlined"
+            variant="contained"
+            color="primary"
             onClick={describeInChat}
             startIcon={<Iconify icon="solar:chat-round-line-linear" width={15} />}
-            sx={{
-              typography: "s2", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap",
-              color: "text.primary", borderColor: "divider",
-              "&:hover": { borderColor: "text.disabled", bgcolor: "action.hover" },
-            }}
+            sx={{ typography: "s2", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}
           >
             Describe in chat
           </Button>

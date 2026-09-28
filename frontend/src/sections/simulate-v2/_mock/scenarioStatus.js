@@ -21,9 +21,10 @@ import { admissionOf } from "./coverage";
 import { proofStatus } from "./proofs";
 import { versionNumber } from "./versions";
 
-export const STATUS_ORDER = ["broken", "quarantined", "needs-env", "no-tool", "stale", "proved"];
+export const STATUS_ORDER = ["checking", "broken", "quarantined", "needs-env", "no-tool", "stale", "proved"];
 
 export const STATUS_META = {
+  checking: { label: "Checking…", tone: null },
   broken: { label: "Broken", tone: "#DC2626" },
   quarantined: { label: "Quarantined", tone: "#CA8A04" },
   "needs-env": { label: "Needs newer env", tone: null },
@@ -38,6 +39,15 @@ export const STATUS_META = {
  */
 export const scenarioStatus = (row, ctx) => {
   const { env, envState, envVersion, answers, buildMode } = ctx;
+  /* Written by the build and still going through its checks — each scenario
+     is checked as it's written, and kept only once it passes. */
+  if (row?.checking) {
+    return {
+      id: "checking",
+      ...STATUS_META.checking,
+      detail: "Just written — being checked that the world holds what it presumes, that it can be solved, and that doing nothing fails it.",
+    };
+  }
   if (row?.provedBroke && (!row.brokeAgainst || !envVersion || row.brokeAgainst === envVersion)) {
     return { id: "broken", ...STATUS_META.broken, detail: "It no longer stages on this world since the environment changed. Re-prove or edit it." };
   }
@@ -76,6 +86,16 @@ export const scenarioStatus = (row, ctx) => {
       };
     }
     return { id: "proved", ...STATUS_META.proved, label: `Proved · ${proof.proved}`, detail: `Staged, solvable and not vacuous on environment ${proof.proved}.` };
+  }
+  /* One the checks sent back once: its first draft passed while the agent
+     did nothing, so it was rewritten and checked again before it was kept. */
+  if (row?.rewritten) {
+    return {
+      id: "proved",
+      ...STATUS_META.proved,
+      label: "Proved · rewritten",
+      detail: "The first draft passed while the agent did nothing, so it was rewritten and checked again. Staged, solvable and not vacuous now.",
+    };
   }
   return { id: "proved", ...STATUS_META.proved, detail: "Staged, solvable and not vacuous." };
 };

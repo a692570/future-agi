@@ -1,11 +1,23 @@
 import React from "react";
 import PropTypes from "prop-types";
 import { forwardRef } from "react";
-import { Icon } from "@iconify/react";
+import { Icon, addIcon } from "@iconify/react";
 
 import Box from "@mui/material/Box";
 
 // ----------------------------------------------------------------------
+
+/*
+  Solar has no plain outline circle — the API answers `not_found` for
+  `solar:circle-linear`, so every "unselected" state that used it rendered
+  as an empty gap. Registered here, drawn like Solar's own circle icons
+  (the ring of `check-circle-linear`), so it resolves locally everywhere.
+*/
+addIcon("solar:circle-linear", {
+  body: '<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  width: 24,
+  height: 24,
+});
 
 /**
  * A wrapper component for displaying Iconify icons with customizable width and styling
