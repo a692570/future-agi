@@ -50,5 +50,20 @@ auth:
   # Redis for rate limiting + usage event emission. Empty disables both.
   redis_addr: ""
 
+# Observed attributes remain disabled for standalone use. Root Compose enables
+# Kafka publication with FI_OBSERVED_CATALOG_MODE=kafka and supplies
+# FI_OBSERVED_CATALOG_KAFKA_BROKERS and FI_OBSERVED_CATALOG_KAFKA_TOPIC.
+# No workspace activation is needed.
+# The separate consumer owns index writes; this producer needs no catalog DB
+# credentials. Keep the spool on a writable persistent volume owned by UID 65532.
+observed_catalog:
+  mode: disabled
+  kafka:
+    brokers: []
+    topic: futureagi.observed-attributes.v1
+  spool:
+    directory: /var/lib/fi-collector/observed-catalog
+  replay_interval: 1s
+
 admin:
   addr: ":9464" # /healthz and /metrics

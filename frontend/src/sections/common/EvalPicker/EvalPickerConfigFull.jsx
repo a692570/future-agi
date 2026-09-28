@@ -17,6 +17,7 @@ import CustomTooltip from "src/components/tooltip/CustomTooltip";
 import { LoadingButton } from "@mui/lab";
 import { enqueueSnackbar } from "notistack";
 import { useFeatureLocked, CAPABILITY } from "src/hooks/useCapabilities";
+import { useErrorLocalizationAvailable } from "src/hooks/useErrorLocalization";
 import { FAGI_MODEL_VALUES } from "src/sections/evals/components/ModelSelector";
 import PropTypes from "prop-types";
 import React, {
@@ -71,6 +72,7 @@ import {
   extractVariablesFromMessages,
 } from "src/utils/utils";
 import { format } from "date-fns";
+import { getSafeActionErrorMessage } from "src/utils/errorUtils";
 import {
   buildEvalTemplateConfig,
   buildCompositeSourceModeProps,
@@ -126,6 +128,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
     CAPABILITY.TURING_MODELS,
   );
   const { locked: agentEvalLocked } = useFeatureLocked(CAPABILITY.AGENTIC_EVAL);
+  const errorLocalizerAvailable = useErrorLocalizationAvailable();
   // Confirmed denial (loaded AND not allowed) — seed the model default raw and
   // only strip it here, never off `locked` (true while loading), so entitled
   // users keep "turing_large" through the fetch.
@@ -191,7 +194,8 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState([]);
   const [contextOptions, setContextOptions] = useState(["variables_only"]);
   const [errorLocalizerEnabled, setErrorLocalizerEnabled] = useState(false);
-  const errorLocalizerActive = errorLocalizerEnabled && !agentEvalLocked;
+  const errorLocalizerActive =
+    errorLocalizerEnabled && !agentEvalLocked && errorLocalizerAvailable;
   // Name for the UserEvalMetric — defaults to template name, user can customise
   const [evalName, setEvalName] = useState("");
   const [dataReady, setDataReady] = useState(false);
@@ -517,6 +521,8 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
         evalData?.config?.run_config ||
         evalData?.config?.runConfig ||
         {};
+      const bindingConfig =
+        evalData?.bindingConfig || evalData?.binding_config || {};
 
       const normalizedRunConfig = {
         ...rawRunConfig,
@@ -572,8 +578,13 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
           evalData?.config?.messages ??
           fullEval?.config?.messages,
       };
+      Object.keys(normalizedRunConfig).forEach((key) => {
+        if (normalizedRunConfig[key] === undefined)
+          delete normalizedRunConfig[key];
+      });
       const config = {
         ...(fullEval.config || {}),
+        ...bindingConfig,
         ...normalizedRunConfig,
       };
       const promptText = getEvalPromptText(fullEval, config);
@@ -922,10 +933,8 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
         setSelectedVersionId(newVersion.id);
       }
     } catch (err) {
-      const message =
-        err?.response?.data?.result || err?.message || "Failed to save version";
       enqueueSnackbar(
-        typeof message === "string" ? message : JSON.stringify(message),
+        getSafeActionErrorMessage(err, "Failed to save version"),
         { variant: "error" },
       );
     }
@@ -1029,7 +1038,10 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
       evalData?.template_type;
 
     const resolvedConfig = buildEvalTemplateConfig({
-      baseConfig: fullEval?.config || evalData?.config || {},
+      baseConfig: {
+        ...(fullEval?.config || {}),
+        ...(isEditMode ? evalData?.bindingConfig || {} : {}),
+      },
       evalType,
       instructions,
       code,
@@ -1730,47 +1742,48 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                 />
               )}
 
-              {/* Error Localization (single-eval concern, LLM/Agent only).
-                  Code evals don't support error localization — the feature
-                  introspects model traces, which code evals don't produce. */}
-              {!isComposite && evalType !== "code" && (
-                <CustomTooltip
-                  show={agentEvalLocked}
-                  type=""
-                  arrow
-                  title={ERROR_LOCALIZER_LOCKED_TOOLTIP}
-                >
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={errorLocalizerActive}
-                        disabled={agentEvalLocked}
-                        onChange={(e) => {
-                          setErrorLocalizerEnabled(e.target.checked);
-                          setIsDirty(true);
-                        }}
-                        size="small"
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2" fontWeight={500}>
-                          Error Localization
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block" }}
-                        >
-                          Pinpoints which parts of the input caused evaluation
-                          failures
-                        </Typography>
-                      </Box>
-                    }
-                    sx={{ alignItems: "flex-start" }}
-                  />
-                </CustomTooltip>
-              )}
+              {/* Single-eval concern, LLM/Agent only — code evals don't produce
+                  the model traces the feature introspects. */}
+              {errorLocalizerAvailable &&
+                !isComposite &&
+                evalType !== "code" && (
+                  <CustomTooltip
+                    show={agentEvalLocked}
+                    type=""
+                    arrow
+                    title={ERROR_LOCALIZER_LOCKED_TOOLTIP}
+                  >
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={errorLocalizerActive}
+                          disabled={agentEvalLocked}
+                          onChange={(e) => {
+                            setErrorLocalizerEnabled(e.target.checked);
+                            setIsDirty(true);
+                          }}
+                          size="small"
+                        />
+                      }
+                      label={
+                        <Box>
+                          <Typography variant="body2" fontWeight={500}>
+                            Error Localization
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: "block" }}
+                          >
+                            Pinpoints which parts of the input caused evaluation
+                            failures
+                          </Typography>
+                        </Box>
+                      }
+                      sx={{ alignItems: "flex-start" }}
+                    />
+                  </CustomTooltip>
+                )}
             </Box>
           }
           rightPanel={
@@ -1839,7 +1852,7 @@ const EvalPickerConfigFull = ({ evalData, onBack, onSave, isSaving }) => {
                 </Box>
               )}
 
-              <Box sx={{ flex: 1, overflow: "auto", pb: 2 }}>
+              <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", pb: 2 }}>
                 {(source === "dataset" ||
                   source === "experiment" ||
                   source === "workbench" ||

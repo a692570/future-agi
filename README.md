@@ -127,7 +127,7 @@ pip install ai-evaluation
 </td>
 <td width="50%">
 
-**One command, full stack. Published images, no source build.**
+**One installer, full stack. The collector builds from this checkout.**
 
 ```bash
 # macOS / Linux / WSL
@@ -143,6 +143,11 @@ cd future-agi
 
 Open [http://localhost:3000](http://localhost:3000).
 <sub>For production, use `./deploy/setup.sh` to generate required secrets and pin the image version.</sub>
+
+Observed attributes use one Kafka topic, one consumer and two additive indexes.
+Existing traces are preserved. Use an explicitly bounded backfill for historical
+attribute coverage; restarts do not scan historical data. See the
+[OSS observation setup and recovery guide](fi-collector/PROPERTY_CATALOG_OSS.md).
 
 </td>
 </tr>
