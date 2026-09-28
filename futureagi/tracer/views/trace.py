@@ -6194,13 +6194,15 @@ class TraceView(BaseModelViewSetMixin, ModelViewSet):
         for row in page_rows:
             trace_id = str(row.get("trace_id", ""))
             span_id = str(row.get("root_span_id") or row.get("span_id") or "")
-            provider = row.get("provider") or "vapi"
 
             # Get span_attributes from CH CDC table (Phase 1b)
             attr_identity = builder.bounded_filter_page_hydration_identity(row)
             attr_row = attrs_map.get(attr_identity, {})
             span_attrs = attr_row.get("span_attributes") or {}
-            provider = attr_row.get("provider") or provider
+            # The same voice provider the list's ClickHouse predicate resolves.
+            provider = ObservabilityService.resolve_voice_provider(
+                attr_row.get("provider") or row.get("provider"), span_attrs
+            )
 
             raw_log = span_raw_log(span_attrs, span_id=span_id)
             # Parity backstop: simulator_call_sql already dropped these in

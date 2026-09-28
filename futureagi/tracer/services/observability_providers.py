@@ -1338,6 +1338,33 @@ class ObservabilityService:
         return VoiceCallLogs(**processed_log).model_dump()
 
     @staticmethod
+    def resolve_voice_provider(
+        provider: str | None, span_attributes: dict | None
+    ) -> str:
+        """The voice provider of a call root, from its provider and attributes.
+
+        The ``provider`` hot column can carry the LLM provider (e.g. 'openai')
+        for a voice span whose assistant runs an OpenAI model — the collector
+        ranks gen_ai.provider.name above gen_ai.system. A label that names no
+        voice provider falls back to gen_ai.system, then to vapi (the dominant
+        provider) rather than 400 the whole voice list on an unrecognized
+        label. ``voice_provider_expression`` is the ClickHouse side of this
+        rule.
+        """
+        voice_providers = {
+            ProviderChoices.VAPI,
+            ProviderChoices.RETELL,
+            ProviderChoices.ELEVEN_LABS,
+            ProviderChoices.BLAND,
+            ProviderChoices.TWILIO,
+        }
+        labels = (provider, (span_attributes or {}).get("gen_ai.system"))
+        for label in (str(value or "").lower() for value in labels):
+            if label in voice_providers:
+                return label
+        return ProviderChoices.VAPI
+
+    @staticmethod
     def process_raw_logs(
         raw_log: dict,
         provider: str,
@@ -1392,22 +1419,9 @@ class ObservabilityService:
                 "call_metadata": sim_meta,
             }
 
-        # The `provider` hot column can carry the LLM provider (e.g. 'openai')
-        # for a voice span whose assistant runs an OpenAI model — the collector
-        # ranks gen_ai.provider.name above gen_ai.system. Resolve the real voice
-        # provider: prefer gen_ai.system, then default to vapi (the dominant
-        # provider) rather than 400 the whole voice list on an unrecognized label.
-        voice_providers = {
-            ProviderChoices.VAPI,
-            ProviderChoices.RETELL,
-            ProviderChoices.ELEVEN_LABS,
-            ProviderChoices.BLAND,
-            ProviderChoices.TWILIO,
-        }
-        if provider not in voice_providers:
-            provider = (span_attributes or {}).get("gen_ai.system") or provider
-        if provider not in voice_providers:
-            provider = ProviderChoices.VAPI
+        provider = ObservabilityService.resolve_voice_provider(
+            provider, span_attributes
+        )
 
         if provider == ProviderChoices.RETELL:
             processed = ObservabilityService._process_retell_logs(raw_log)
