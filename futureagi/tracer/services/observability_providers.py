@@ -15,7 +15,11 @@ from django.utils import timezone
 
 from simulate.models.agent_definition import AgentDefinition, ProviderCredentials
 from tracer.constants.external_endpoints import ObservabilityRoutes
-from tracer.models.observability_provider import ObservabilityProvider, ProviderChoices
+from tracer.models.observability_provider import (
+    VOICE_CALL_PROVIDERS,
+    ObservabilityProvider,
+    ProviderChoices,
+)
 from tracer.models.project import VoiceCallLogs
 from tracer.utils.attribute_accessor import vapi_customer
 
@@ -1351,16 +1355,9 @@ class ObservabilityService:
         label. ``voice_provider_expression`` is the ClickHouse side of this
         rule.
         """
-        voice_providers = {
-            ProviderChoices.VAPI,
-            ProviderChoices.RETELL,
-            ProviderChoices.ELEVEN_LABS,
-            ProviderChoices.BLAND,
-            ProviderChoices.TWILIO,
-        }
         labels = (provider, (span_attributes or {}).get("gen_ai.system"))
         for label in (str(value or "").lower() for value in labels):
-            if label in voice_providers:
+            if label in VOICE_CALL_PROVIDERS:
                 return label
         return ProviderChoices.VAPI
 

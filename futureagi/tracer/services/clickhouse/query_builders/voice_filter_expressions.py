@@ -5,6 +5,8 @@ They deliberately use legacy span column tokens; the CH25 compiler rewrites
 those tokens once at its schema boundary.
 """
 
+from tracer.models.observability_provider import VOICE_CALL_PROVIDERS
+
 
 def voice_conversation_root_expression(expression: str) -> str:
     """Restrict one public voice value to its rendered conversation root."""
@@ -70,6 +72,10 @@ _RAW_RETELL_COST_CENTS = _raw_log_number(("call_cost", "combined_cost"))
 _RAW_VAPI_COST_DOLLARS = _raw_log_number(("cost",))
 _RAW_ELEVEN_LABS_COST_CENTS = _raw_log_number(("metadata", "cost"))
 _RAW_PRICE_DOLLARS = _raw_log_number(("price",))
+# ProviderChoices values are fixed identifiers, so plain quoting is safe.
+_VOICE_CALL_PROVIDERS_SQL = ", ".join(
+    f"'{provider.value}'" for provider in VOICE_CALL_PROVIDERS
+)
 
 
 def voice_provider_expression(provider: str, span_attr_str: str) -> str:
@@ -89,11 +95,9 @@ def voice_provider_expression(provider: str, span_attr_str: str) -> str:
     )
     return (
         "multiIf("
-        f"{voice_provider} IN ('vapi', 'retell', 'eleven_labs', 'bland', 'twilio'), "
-        f"{voice_provider}, "
-        f"{gen_ai_system} IN "
-        "('vapi', 'retell', 'eleven_labs', 'bland', 'twilio'), "
-        f"{gen_ai_system}, 'vapi')"
+        f"{voice_provider} IN ({_VOICE_CALL_PROVIDERS_SQL}), {voice_provider}, "
+        f"{gen_ai_system} IN ({_VOICE_CALL_PROVIDERS_SQL}), {gen_ai_system}, "
+        "'vapi')"
     )
 
 
