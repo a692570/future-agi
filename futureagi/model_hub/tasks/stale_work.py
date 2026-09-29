@@ -20,6 +20,13 @@ STALE_WORK_BATCH_SIZE = 500
 def recover_stale_work_activity() -> dict:
     apply = settings.STALE_WORK_RECOVERY_APPLY
     report = recover_stale_work(apply=apply, batch_size=STALE_WORK_BATCH_SIZE)
-    result = {"mode": "apply" if apply else "report_only", **report.counts()}
+    counts = report.counts()
+    result = {
+        "mode": "apply" if apply else "report_only",
+        # Report-only ticks close nothing; say so in the key a reader greps.
+        "recovered" if apply else "would_recover": counts["recovered"],
+        "excluded": counts["excluded"],
+        "skipped": counts["skipped"],
+    }
     logger.info("stale_work_recovery_tick", **result)
     return result

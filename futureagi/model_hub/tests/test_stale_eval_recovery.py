@@ -506,7 +506,9 @@ def test_the_schedule_changes_nothing_until_recovery_is_switched_on(
         assert _cells(columns) == before
     assert result == {
         "mode": "apply" if apply else "report_only",
-        "recovered": {"dataset_eval_cells": {str(metric.organization_id): 1}},
+        "recovered" if apply else "would_recover": {
+            "dataset_eval_cells": {str(metric.organization_id): 1}
+        },
         "excluded": {},
         "skipped": {},
     }

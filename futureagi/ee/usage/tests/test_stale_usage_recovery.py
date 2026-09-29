@@ -410,7 +410,7 @@ def test_the_schedule_changes_nothing_until_recovery_is_switched_on(
     org = str(organization.id)
     assert result == {
         "mode": "apply" if apply else "report_only",
-        "recovered": {"standalone_v2": {org: 1}},
+        "recovered" if apply else "would_recover": {"standalone_v2": {org: 1}},
         "excluded": {
             "creator_never_closes": {"tracer": {org: 1}},
             "holds_result": {"dataset_evaluation": {org: 1}},
