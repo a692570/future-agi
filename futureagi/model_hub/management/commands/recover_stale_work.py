@@ -1,8 +1,10 @@
 """Close eval cells and usage rows abandoned mid-run.
 
-The same recovery the hourly ``recover-stale-work`` schedule runs, for closing
-an existing backlog by hand. Dry run by default: it lists what would be closed,
-per source, organization and dataset, and writes nothing.
+The same recovery the hourly ``recover-stale-work`` schedule runs (which only
+reports until ``STALE_WORK_RECOVERY_APPLY`` is on), for reviewing or closing an
+existing backlog by hand. Dry run by default: it lists what would be closed,
+per source, organization and dataset, and what is left alone and why, and
+writes nothing.
 
 A hosted deployment runs it as a one-shot operator job
 (SERVICE_TYPE=bootstrap, STARTUP_DB_MUTATION_MODE=operator), like the other
@@ -22,6 +24,7 @@ from django.core.management.base import BaseCommand
 
 from model_hub.services.stale_work import (
     DATASET_EVAL_SOURCE,
+    ExcludedWork,
     RecoveredWork,
     recover_stale_work,
     recoverable_sources,
@@ -54,6 +57,8 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         older_than = timedelta(hours=opts["older_than"]) if opts["older_than"] else None
         recovered: list[RecoveredWork] = []
+        # Excluded work stays in place, so every pass reads it again.
+        excluded: dict[tuple[str, str], ExcludedWork] = {}
         skipped: dict[str, str] = {}
         while True:
             report = recover_stale_work(
@@ -63,6 +68,7 @@ class Command(BaseCommand):
                 older_than=older_than,
             )
             recovered.extend(report.recovered)
+            excluded.update(((w.source, w.unit_id), w) for w in report.excluded)
             skipped.update(report.skipped)
             # A dry run changes nothing, so another pass would list the same.
             if not opts["apply"] or not report.recovered:
@@ -90,6 +96,16 @@ class Command(BaseCommand):
             [w for w in recovered if w.dataset_id],
             lambda w: (w.dataset_id, w.organization_id),
         )
+        # Rows whose creator never closes them, or that hold a result, for the
+        # owner to decide on; items are usage rows or eval cells.
+        left = Counter()
+        for work in excluded.values():
+            left[(work.reason, work.source, work.organization_id)] += work.items
+        self.stdout.write(
+            "Excluded, left as they are (reason source organization: items):"
+        )
+        for group, items in sorted(left.items()):
+            self.stdout.write(f"  {' '.join(group)}: {items}")
 
     def _write_counts(self, title, recovered, key):
         units = Counter(key(work) for work in recovered)

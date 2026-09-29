@@ -7,6 +7,10 @@ again: the grid shows them loading forever. Recovery closes them the way the
 runner closes a run that crashed (``EvaluationRunner.run_prompt``): the eval
 becomes ``Error`` and its running cells ``error`` with a reason.
 
+A running cell that still holds a value is left as it is and reported: a rerun
+flips cells to ``running`` and often keeps their value, so the cell still shows
+an earlier result. An eval whose running cells all hold one is not touched.
+
 A column is abandoned when none of its cells has been written for longer than
 any run can last. The last write comes from the ClickHouse mirror
 (``model_hub.selectors.stale_eval_cells``), the only place a bulk flip to
@@ -16,10 +20,11 @@ any run can last. The last write comes from the ClickHouse mirror
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import structlog
+from django.db.models import Count
 from django.utils import timezone
 
 from model_hub.models.choices import CellStatus, SourceChoices, StatusType
@@ -30,7 +35,10 @@ from model_hub.selectors.stale_eval_cells import (
     read_mirror_last_write,
     read_running_columns,
 )
-from model_hub.utils.eval_cell_status import mark_eval_cells_stopped
+from model_hub.utils.eval_cell_status import (
+    CELL_WITHOUT_VALUE,
+    mark_eval_cells_stopped,
+)
 from tfc.utils.error_codes import get_error_message
 
 logger = structlog.get_logger(__name__)
@@ -56,6 +64,8 @@ _QUEUED_STATUSES = frozenset(
 
 _REASON_SOURCE_ID_SEPARATOR = "-sourceid-"
 
+EXCLUDED_HOLDS_RESULT = "holds_result"
+
 
 @dataclass(frozen=True)
 class RecoveredEval:
@@ -68,8 +78,20 @@ class RecoveredEval:
 
 
 @dataclass(frozen=True)
+class ExcludedEval:
+    """An abandoned eval's running cells that still hold a result."""
+
+    user_eval_metric_id: str
+    organization_id: str
+    dataset_id: str
+    reason: str
+    cells: int
+
+
+@dataclass(frozen=True)
 class DatasetEvalRecovery:
     recovered: list[RecoveredEval]
+    excluded: list[ExcludedEval] = field(default_factory=list)
     # Why nothing was read: "mirror_unavailable" or "mirror_idle".
     skipped: str | None = None
 
@@ -139,7 +161,9 @@ def recover_stale_dataset_evals(
     one that went ``Running`` within the age (``updated_at``): its run may
     still be waiting for a worker. An abandoned ``Running`` eval becomes
     ``Error``; a finished one keeps its status and only its leftover running
-    cells are closed.
+    cells are closed. Running cells that hold a value are never closed; they
+    are reported in ``excluded``, and an eval with no other running cell is
+    left as it is.
     """
     if not mirror_is_available():
         return DatasetEvalRecovery(recovered=[], skipped="mirror_unavailable")
@@ -166,6 +190,7 @@ def recover_stale_dataset_evals(
 
     reason = get_error_message("RUN_INTERRUPTED")
     recovered = []
+    excluded = []
     for metric in metrics:
         if len(recovered) >= limit:
             break
@@ -174,11 +199,25 @@ def recover_stale_dataset_evals(
         if metric.status == StatusType.RUNNING.value and metric.updated_at >= cutoff:
             continue
         column_ids = stale_by_metric[str(metric.id)]
-        running_cells = Cell.objects.filter(
+        running = Cell.objects.filter(
             column_id__in=column_ids,
             deleted=False,
             status=CellStatus.RUNNING.value,
-        ).count()
+        ).aggregate(
+            total=Count("id"), without_value=Count("id", filter=CELL_WITHOUT_VALUE)
+        )
+        running_cells = running["without_value"]
+        holding_results = running["total"] - running_cells
+        if holding_results:
+            excluded.append(
+                ExcludedEval(
+                    user_eval_metric_id=str(metric.id),
+                    organization_id=str(metric.organization_id),
+                    dataset_id=str(metric.dataset_id),
+                    reason=EXCLUDED_HOLDS_RESULT,
+                    cells=holding_results,
+                )
+            )
         if not running_cells:
             continue
         if apply:
@@ -198,7 +237,7 @@ def recover_stale_dataset_evals(
             if not claimed:
                 continue
             running_cells = mark_eval_cells_stopped(
-                metric, reason=reason, column_ids=column_ids
+                metric, reason=reason, column_ids=column_ids, keep_values=True
             )
             if not running_cells:
                 # Closed meanwhile, or the write failed (logged by the helper).
@@ -215,4 +254,4 @@ def recover_stale_dataset_evals(
         )
     if apply:
         logger.info("stale_dataset_evals_closed", evals=len(recovered))
-    return DatasetEvalRecovery(recovered=recovered)
+    return DatasetEvalRecovery(recovered=recovered, excluded=excluded)

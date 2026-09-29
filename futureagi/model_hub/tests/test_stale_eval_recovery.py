@@ -6,6 +6,12 @@ mirror's first sync on 2026-07-18; nothing ever selects them again, so the
 grid shows them loading forever. Live runs must be left alone: every flip to
 ``running`` is a bulk write that leaves ``updated_at`` behind, so the last
 write is read from the mirror's ``_peerdb_synced_at``.
+
+A rerun flips cells to ``running`` and often keeps their value (for example
+develop_dataset.py's rerun of an eval column): such a cell still shows an
+earlier result. Recovery closes only running cells without a value. Production
+(mirror, 2026-09-29): 1,767 running cells in 62 live evals hold a value; 40 of
+those evals have no other running cell and are left alone.
 """
 
 import json
@@ -35,6 +41,7 @@ from model_hub.services.stale_eval_recovery import (
     DatasetEvalRecovery,
     recover_stale_dataset_evals,
 )
+from model_hub.tasks.stale_work import recover_stale_work_activity
 from tfc.utils.error_codes import get_error_message
 from tracer.services.clickhouse.schema import CDC_MODEL_HUB_CELL
 
@@ -428,3 +435,78 @@ def test_the_open_build_recovers_dataset_evals_alone(monkeypatch):
         stale_work.recover_stale_work(
             apply=True, batch_size=10, sources=["standalone_v2"]
         )
+
+
+def test_a_cell_still_showing_an_earlier_result_is_left_as_it_is(monkeypatch, eval_run):
+    """The rerun kept the result cell's value; only the empty running cell
+    (its reason) is closed, and the kept cell is reported."""
+    metric, columns = eval_run
+    result_column, _ = columns
+    Cell.objects.filter(column=result_column, status=RUNNING).update(value="Passed")
+    _mirror_reports(monkeypatch, columns, last_write_age=timedelta(hours=30))
+
+    recovery = recover_stale_dataset_evals(apply=True, limit=10)
+
+    metric.refresh_from_db()
+    assert metric.status == StatusType.ERROR.value
+    assert _cells(columns) == [
+        (RUNNING, "Passed", []),
+        ("error", INTERRUPTED, json.dumps({"reason": INTERRUPTED})),
+        ("pass", "", []),
+        ("pass", "", []),
+    ]
+    assert [(r.user_eval_metric_id, r.running_cells) for r in recovery.recovered] == [
+        (str(metric.id), 1)
+    ]
+    assert [(e.user_eval_metric_id, e.cells) for e in recovery.excluded] == [
+        (str(metric.id), 1)
+    ]
+
+
+def test_an_eval_whose_running_cells_all_hold_results_is_left_alone(
+    monkeypatch, eval_run
+):
+    metric, columns = eval_run
+    Cell.objects.filter(column__in=columns, status=RUNNING).update(value="Passed")
+    _mirror_reports(monkeypatch, columns, last_write_age=timedelta(hours=30))
+    before = _cells(columns)
+
+    recovery = recover_stale_dataset_evals(apply=True, limit=10)
+
+    metric.refresh_from_db()
+    assert metric.status == StatusType.RUNNING.value
+    assert _cells(columns) == before
+    assert recovery.recovered == []
+    assert [(e.user_eval_metric_id, e.cells) for e in recovery.excluded] == [
+        (str(metric.id), 2)
+    ]
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["report_only", "apply"])
+def test_the_schedule_changes_nothing_until_recovery_is_switched_on(
+    monkeypatch, settings, eval_run, apply
+):
+    """``STALE_WORK_RECOVERY_APPLY`` is off by default: the hourly tick only
+    reports what it would close. A deploy re-registers every schedule and
+    clears a pause, so the setting is the switch that holds."""
+    settings.STALE_WORK_RECOVERY_APPLY = apply
+    monkeypatch.setattr(stale_work, "_RECOVERERS", {})
+    metric, columns = eval_run
+    _mirror_reports(monkeypatch, columns, last_write_age=timedelta(hours=30))
+    before = _cells(columns)
+
+    result = recover_stale_work_activity._original_func()
+
+    metric.refresh_from_db()
+    if apply:
+        assert metric.status == StatusType.ERROR.value
+        assert [status for status, _, _ in _cells(columns)][:2] == ["error", "error"]
+    else:
+        assert metric.status == StatusType.RUNNING.value
+        assert _cells(columns) == before
+    assert result == {
+        "mode": "apply" if apply else "report_only",
+        "recovered": {"dataset_eval_cells": {str(metric.organization_id): 1}},
+        "excluded": {},
+        "skipped": {},
+    }

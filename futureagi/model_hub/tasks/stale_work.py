@@ -1,8 +1,11 @@
-"""Scheduled recovery of work abandoned mid-run (``recover-stale-work``)."""
+"""Scheduled recovery of work abandoned mid-run (``recover-stale-work``).
 
-from collections import Counter
+Report-only unless ``STALE_WORK_RECOVERY_APPLY`` is on: the tick then logs what
+it would close and what it leaves alone, and changes nothing.
+"""
 
 import structlog
+from django.conf import settings
 
 from model_hub.services.stale_work import recover_stale_work
 from tfc.temporal.drop_in import temporal_activity
@@ -15,7 +18,8 @@ STALE_WORK_BATCH_SIZE = 500
 
 @temporal_activity(time_limit=900, max_retries=0, queue="default")
 def recover_stale_work_activity() -> dict:
-    report = recover_stale_work(apply=True, batch_size=STALE_WORK_BATCH_SIZE)
-    recovered = dict(Counter(work.source for work in report.recovered))
-    logger.info("stale_work_recovered", recovered=recovered, skipped=report.skipped)
-    return {"recovered": recovered, "skipped": report.skipped}
+    apply = settings.STALE_WORK_RECOVERY_APPLY
+    report = recover_stale_work(apply=apply, batch_size=STALE_WORK_BATCH_SIZE)
+    result = {"mode": "apply" if apply else "report_only", **report.counts()}
+    logger.info("stale_work_recovery_tick", **result)
+    return result
