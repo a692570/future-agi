@@ -41,7 +41,7 @@ logger = structlog.get_logger(__name__)
 # 1 h attempts included. A column no one has written for longer has no run left.
 DATASET_EVAL_STALE_AFTER = timedelta(hours=24)
 
-# A mirror that has applied nothing for this long is paused or broken, and the
+# A mirror this far behind is paused, broken or replaying a backlog, and the
 # last writes it reports can predate a rerun it has not received.
 MIRROR_MAX_IDLE = timedelta(minutes=30)
 

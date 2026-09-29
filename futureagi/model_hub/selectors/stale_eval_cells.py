@@ -51,7 +51,9 @@ ORDER BY last_write DESC
 LIMIT %(limit)s
 """
 
-_MIRROR_LAST_WRITE_SQL = "SELECT max(_peerdb_synced_at) FROM model_hub_cell"
+_MIRROR_LAST_WRITE_SQL = (
+    "SELECT max(_peerdb_synced_at), max(updated_at) FROM model_hub_cell"
+)
 
 
 @dataclass(frozen=True)
@@ -73,11 +75,18 @@ def mirror_is_available() -> bool:
 
 
 def read_mirror_last_write() -> datetime | None:
-    """When the cell mirror last applied a write; None when it holds nothing."""
+    """How current the cell mirror is; None when it holds nothing.
+
+    The older of when it last applied a write and the newest Postgres write
+    stamp it holds: while CDC replays a backlog, the first is fresh and the
+    mirror still lacks everything written after the second.
+    """
     rows, _, _ = get_clickhouse_client().execute_read(
         _MIRROR_LAST_WRITE_SQL, timeout_ms=_READ_TIMEOUT_MS
     )
-    return _as_utc(rows[0][0]) if rows and rows[0][0] else None
+    if not rows or not all(rows[0]):
+        return None
+    return min(_as_utc(value) for value in rows[0])
 
 
 def read_running_columns() -> list[RunningColumn]:

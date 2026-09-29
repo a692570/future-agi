@@ -1,16 +1,18 @@
 """Recovery for work abandoned mid-run, by source.
 
 The ``recover-stale-work`` schedule and the ``recover_stale_work`` command both
-come through ``recover_stale_work``. Dataset eval cells are recovered here;
-usage rows live in the enterprise usage ledger and are recovered there.
+come through ``recover_stale_work``. Dataset eval cells are recovered here.
+Other in-progress state is recovered by the app that owns it, which registers
+a recoverer for its sources when it loads (the enterprise usage app does, for
+its usage rows); the open build registers none.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Protocol
 
 import structlog
 
@@ -40,30 +42,33 @@ class StaleWorkReport:
     skipped: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class _UsageLedger:
-    sources: frozenset[str]
-    recover: Callable[..., Sequence[Any]]
+class StaleWorkRecoverer(Protocol):
+    def __call__(
+        self,
+        *,
+        apply: bool,
+        sources: Collection[str],
+        older_than: timedelta | None,
+        limit: int,
+    ) -> Sequence[RecoveredWork]:
+        """Close (or, without ``apply``, list) up to ``limit`` abandoned units
+        of ``sources``, never younger than the source's own minimum age."""
 
 
-def _usage_ledger() -> _UsageLedger | None:
-    # The usage ledger (APICallLog) exists only with the enterprise tree; the
-    # open build keeps no usage rows, so there is nothing to recover there.
-    try:
-        from ee.usage.services.stale_usage import (
-            STALE_AFTER_BY_SOURCE,
-            recover_stale_usage_rows,
-        )
-    except ImportError:
-        return None
-    return _UsageLedger(
-        sources=frozenset(STALE_AFTER_BY_SOURCE), recover=recover_stale_usage_rows
-    )
+# Source -> the recoverer its owning app registered.
+_RECOVERERS: dict[str, StaleWorkRecoverer] = {}
+
+
+def register_stale_work_recoverer(
+    sources: Collection[str], recover: StaleWorkRecoverer
+) -> None:
+    """Recover ``sources`` with ``recover``; registering again replaces it."""
+    for source in sources:
+        _RECOVERERS[source] = recover
 
 
 def recoverable_sources() -> list[str]:
-    ledger = _usage_ledger()
-    return [DATASET_EVAL_SOURCE, *sorted(ledger.sources if ledger else ())]
+    return [DATASET_EVAL_SOURCE, *sorted(_RECOVERERS)]
 
 
 def recover_stale_work(
@@ -107,28 +112,22 @@ def recover_stale_work(
                 for recovered in evals.recovered
             )
 
-    usage_sources = selected - {DATASET_EVAL_SOURCE}
-    ledger = _usage_ledger() if usage_sources else None
-    if ledger:
+    sources_by_recoverer: dict[StaleWorkRecoverer, set[str]] = {}
+    for source in selected - {DATASET_EVAL_SOURCE}:
+        sources_by_recoverer.setdefault(_RECOVERERS[source], set()).add(source)
+    for recover, recover_sources in sources_by_recoverer.items():
         try:
-            rows = ledger.recover(
-                apply=apply,
-                sources=usage_sources,
-                older_than=older_than,
-                limit=batch_size,
+            report.recovered.extend(
+                recover(
+                    apply=apply,
+                    sources=recover_sources,
+                    older_than=older_than,
+                    limit=batch_size,
+                )
             )
         except Exception:
-            logger.exception("stale_usage_row_recovery_failed")
-            report.skipped.update(dict.fromkeys(usage_sources, "error"))
-        else:
-            report.recovered.extend(
-                RecoveredWork(
-                    source=row.source,
-                    organization_id=row.organization_id,
-                    dataset_id=None,
-                    items=1,
-                    refunds=int(row.refunded),
-                )
-                for row in rows
+            logger.exception(
+                "stale_work_recovery_failed", sources=sorted(recover_sources)
             )
+            report.skipped.update(dict.fromkeys(recover_sources, "error"))
     return report

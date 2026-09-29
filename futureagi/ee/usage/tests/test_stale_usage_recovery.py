@@ -17,9 +17,12 @@ from django.utils import timezone
 
 from ee.usage.models.usage import APICallLog, APICallType
 from ee.usage.services.stale_usage import (
+    STALE_AFTER_BY_SOURCE,
     close_stale_usage_row,
     recover_stale_usage_rows,
 )
+from ee.usage.utils.usage_entries import refund_cost_for_api_call
+from model_hub.services.stale_work import recoverable_sources
 from model_hub.views.eval_runner import EvaluationRunner
 from tfc.constants.api_calls import APICallStatusChoices, APICallTypeChoices
 from tfc.utils.error_codes import get_error_message
@@ -65,6 +68,22 @@ def test_abandoned_row_is_closed_with_the_interrupted_reason(organization):
         "mappings": {"input": "hi"},
         "output": {"output": None, "reason": get_error_message("RUN_INTERRUPTED")},
     }
+
+
+@pytest.mark.parametrize("config", ["not json", "[1, 2]", "null", [1, 2]])
+def test_a_config_that_is_not_a_json_object_is_kept_and_the_row_closes(
+    organization, config
+):
+    """Such a row used to raise on every hourly tick and stay ``processing``."""
+    row = _row(organization, source="standalone_v2", age=timedelta(hours=30))
+    APICallLog.no_workspace_objects.filter(id=row.id).update(config=config)
+
+    recovered = recover_stale_usage_rows(apply=True, limit=100)
+
+    assert [r.id for r in recovered] == [row.id]
+    row.refresh_from_db()
+    assert row.status == APICallStatusChoices.ERROR.value
+    assert row.config == config
 
 
 def test_row_younger_than_its_source_age_is_live_and_untouched(organization):
@@ -155,6 +174,31 @@ def test_billing_matches_the_eval_runner_error_path(organization, deducted_cost)
     assert abandoned.status == failed.status == APICallStatusChoices.ERROR.value
     assert [r.cost for r in _refunds(abandoned)] == [r.cost for r in _refunds(failed)]
     assert _refunds(abandoned).count() == (1 if Decimal(deducted_cost) else 0)
+
+
+def test_a_row_already_refunded_is_not_refunded_again(organization):
+    """A legacy wallet row that already has a refund recorded is closed
+    without a second one."""
+    APICallType.objects.get_or_create(name=APICallTypeChoices.WALLET_REFUND.value)
+    row = _row(
+        organization,
+        source="experiment",
+        age=timedelta(hours=30),
+        deducted_cost="0.5",
+    )
+    refund_cost_for_api_call(row)
+
+    (listed,) = recover_stale_usage_rows(apply=False, limit=100)
+    (closed,) = recover_stale_usage_rows(apply=True, limit=100)
+
+    assert listed.refunded is closed.refunded is False
+    row.refresh_from_db()
+    assert row.status == APICallStatusChoices.ERROR.value
+    assert _refunds(row).count() == 1
+
+
+def test_the_usage_app_registers_every_source_for_recovery():
+    assert set(STALE_AFTER_BY_SOURCE) <= set(recoverable_sources())
 
 
 def test_sources_that_never_refund_on_error_are_not_refunded(organization):

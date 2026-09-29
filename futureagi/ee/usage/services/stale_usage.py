@@ -26,6 +26,7 @@ from django.utils import timezone
 
 from ee.usage.models.usage import APICallLog
 from ee.usage.utils.usage_entries import refund_cost_for_api_call
+from model_hub.services.stale_work import RecoveredWork
 from tfc.constants.api_calls import APICallStatusChoices
 from tfc.utils.error_codes import get_error_message
 
@@ -97,18 +98,25 @@ def find_stale_usage_rows(
     )
 
 
-def _with_interrupted_output(config: dict | str, reason: str) -> dict | str:
+def _with_interrupted_output(config: object, reason: str) -> object:
     """The row's config with the error output the eval paths write.
 
     Most rows hold their config as a JSON string inside the JSON field; keep
-    whichever encoding the row has.
+    whichever encoding the row has. A config that is not a JSON object is kept
+    as it is: the row still closes, and loses nothing.
     """
     output = {"output": None, "reason": reason}
-    if isinstance(config, str):
+    if isinstance(config, dict):
+        return {**config, "output": output}
+    if not isinstance(config, str):
+        return config
+    try:
         decoded = json.loads(config) if config else {}
-        decoded["output"] = output
-        return json.dumps(decoded, default=str)
-    return {**config, "output": output}
+    except ValueError:
+        return config
+    if not isinstance(decoded, dict):
+        return config
+    return json.dumps({**decoded, "output": output}, default=str)
 
 
 def _owes_refund(row: APICallLog) -> bool:
@@ -198,3 +206,26 @@ def recover_stale_usage_rows(
             recovered.append(closed)
     logger.info("stale_usage_rows_closed", candidates=len(rows), closed=len(recovered))
     return recovered
+
+
+def recover_stale_usage_work(
+    *,
+    apply: bool,
+    sources: Collection[str],
+    older_than: timedelta | None,
+    limit: int,
+) -> list[RecoveredWork]:
+    """``recover_stale_usage_rows`` as the stale-work recovery reports it."""
+    rows = recover_stale_usage_rows(
+        apply=apply, sources=sources, older_than=older_than, limit=limit
+    )
+    return [
+        RecoveredWork(
+            source=row.source,
+            organization_id=row.organization_id,
+            dataset_id=None,
+            items=1,
+            refunds=int(row.refunded),
+        )
+        for row in rows
+    ]

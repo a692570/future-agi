@@ -30,8 +30,11 @@ from model_hub.models.develop_dataset import Cell, Column, Dataset, Row
 from model_hub.models.evals_metric import EvalTemplate, UserEvalMetric
 from model_hub.selectors import stale_eval_cells
 from model_hub.selectors.stale_eval_cells import RunningColumn
-from model_hub.services import stale_eval_recovery
-from model_hub.services.stale_eval_recovery import recover_stale_dataset_evals
+from model_hub.services import stale_eval_recovery, stale_work
+from model_hub.services.stale_eval_recovery import (
+    DatasetEvalRecovery,
+    recover_stale_dataset_evals,
+)
 from tfc.utils.error_codes import get_error_message
 from tracer.services.clickhouse.schema import CDC_MODEL_HUB_CELL
 
@@ -65,7 +68,9 @@ def mirror(monkeypatch):
             yield client
 
 
-def _write(client, *, cell, column, status, synced, version, deleted=0):
+def _write(client, *, cell, column, status, synced, version, deleted=0, written=None):
+    # ``written`` is the Postgres write stamp; the mirror applies it at ``synced``.
+    written = written or synced
     client.execute(
         "INSERT INTO model_hub_cell (id, dataset_id, column_id, row_id, status, "
         "created_at, updated_at, deleted, _peerdb_synced_at, _peerdb_version) VALUES",
@@ -76,8 +81,8 @@ def _write(client, *, cell, column, status, synced, version, deleted=0):
                 column,
                 uuid.uuid4(),
                 status,
-                synced,
-                synced,
+                written,
+                written,
                 deleted,
                 synced,
                 version,
@@ -150,6 +155,24 @@ def test_last_write_counts_every_version_bulk_resets_included(mirror):
         RunningColumn(str(abandoned), 1, old.replace(tzinfo=UTC)),
     ]
     assert stale_eval_cells.read_mirror_last_write() == recent.replace(tzinfo=UTC)
+
+
+def test_a_mirror_replaying_a_backlog_is_only_as_current_as_its_newest_write(mirror):
+    """While CDC replays a backlog every applied row is freshly synced, but the
+    mirror still lacks everything Postgres wrote since the replayed rows."""
+    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    replayed = now - timedelta(hours=3)
+    _write(
+        mirror,
+        cell=uuid.uuid4(),
+        column=uuid.uuid4(),
+        status=RUNNING,
+        synced=now,
+        written=replayed,
+        version=1,
+    )
+
+    assert stale_eval_cells.read_mirror_last_write() == replayed.replace(tzinfo=UTC)
 
 
 # --- Recovery, on PostgreSQL with the mirror's answer stubbed ----------------
@@ -386,3 +409,22 @@ def test_queueing_a_run_stamps_when_it_went_running(monkeypatch, eval_run):
     metric.refresh_from_db()
     assert metric.status == StatusType.RUNNING.value
     assert timezone.now() - metric.updated_at < timedelta(minutes=1)
+
+
+def test_the_open_build_recovers_dataset_evals_alone(monkeypatch):
+    """Usage rows exist only with the enterprise usage app, which registers
+    their recovery when it loads; the open build registers nothing."""
+    monkeypatch.setattr(stale_work, "_RECOVERERS", {})
+    monkeypatch.setattr(
+        stale_work,
+        "recover_stale_dataset_evals",
+        lambda **_: DatasetEvalRecovery(recovered=[]),
+    )
+
+    assert stale_work.recoverable_sources() == [stale_work.DATASET_EVAL_SOURCE]
+    report = stale_work.recover_stale_work(apply=True, batch_size=10)
+    assert report == stale_work.StaleWorkReport()
+    with pytest.raises(ValueError, match="standalone_v2"):
+        stale_work.recover_stale_work(
+            apply=True, batch_size=10, sources=["standalone_v2"]
+        )
