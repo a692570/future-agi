@@ -234,11 +234,15 @@ def _owes_refund(row: APICallLog, already_refunded: set[str]) -> bool:
     """Whether the source's own error path would refund this row now.
 
     Postpaid rows deduct nothing, so only legacy wallet rows qualify, and a row
-    already refunded is not refunded again.
+    already refunded is not refunded again. A dataset eval preview
+    (``process_eval_for_single_row``) logs under ``dataset_evaluation`` with
+    ``preview`` set, and its error path never refunds.
     """
+    config = _decoded_config(row.config) or {}
     return (
         row.source in _REFUNDED_ON_ERROR
         and row.deducted_cost > 0
+        and not config.get("preview")
         and str(row.id) not in already_refunded
     )
 

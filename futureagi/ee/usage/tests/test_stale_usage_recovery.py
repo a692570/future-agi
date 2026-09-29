@@ -253,6 +253,28 @@ def test_sources_that_never_refund_on_error_are_not_refunded(organization):
     assert not _refunds(legacy).exists()
 
 
+def test_a_preview_run_is_closed_without_a_refund(organization):
+    """Dataset eval previews (process_eval_for_single_row) log under
+    dataset_evaluation with preview set, and their error path never refunds,
+    so recovery does not either."""
+    APICallType.objects.get_or_create(name=APICallTypeChoices.WALLET_REFUND.value)
+    preview = _row(
+        organization,
+        source="dataset_evaluation",
+        age=timedelta(days=3),
+        config={"mappings": {"input": "hi"}, "preview": True},
+        deducted_cost="0.5",
+    )
+
+    (listed,) = recover_stale_usage_rows(apply=False, limit=100).recovered
+    (closed,) = recover_stale_usage_rows(apply=True, limit=100).recovered
+
+    assert listed.refunded is closed.refunded is False
+    preview.refresh_from_db()
+    assert preview.status == APICallStatusChoices.ERROR.value
+    assert not _refunds(preview).exists()
+
+
 def test_command_dry_run_changes_nothing_then_apply_closes(organization, capsys):
     row = _row(organization, source="standalone_v2", age=timedelta(hours=30))
 
